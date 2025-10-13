@@ -252,3 +252,30 @@ const getAlertStats = async (req, res) => {
     res.status(500).json({ error: 'Failed to retrieve alert statistics' });
   }
 };
+
+/**
+ * Clear all alerts
+ */
+const clearAllAlerts = async (req, res) => {
+  try {
+    const success = await storage.clearAllAlerts();
+    
+    if (success) {
+      res.json({ message: 'All alerts cleared successfully' });
+    } else {
+      res.status(500).json({ error: 'Failed to clear alerts' });
+    }
+  } catch (error) {
+    console.error('Error clearing alerts:', error);
+    res.status(500).json({ error: 'Failed to clear alerts' });
+  }
+};
+
+module.exports = {
+  getAlerts,
+  getAlertById,
+  deleteAlert,
+  updateAlertStatus,
+  getAlertStats,
+  clearAllAlerts
+};

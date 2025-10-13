@@ -36,6 +36,12 @@ router.post('/capture/stop', captureController.stopCapture);
 router.get('/capture/interfaces', captureController.getInterfaces);
 router.get('/capture/filters', captureController.getAvailableFilters);
 
+// Packet routes (alternative naming)
+router.get('/packets/status', captureController.getCaptureStatus);
+router.post('/packets/start', captureController.startCapture);
+router.post('/packets/stop', captureController.stopCapture);
+router.get('/interfaces', captureController.getInterfaces);
+
 // IDS Engine control routes
 router.get('/ids/status', idsController.getEngineStatus);
 router.post('/ids/start', idsController.startEngine);
@@ -50,6 +56,18 @@ router.get('/status', (req, res) => {
     status: 'operational',
     timestamp: new Date().toISOString(),
     version: '1.0.0'
+  });
+});
+
+router.get('/system/info', (req, res) => {
+  res.json({
+    status: 'operational',
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    version: '1.0.0',
+    node_version: process.version,
+    platform: process.platform,
+    timestamp: new Date().toISOString()
   });
 });
 

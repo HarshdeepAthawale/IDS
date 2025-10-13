@@ -1,5 +1,5 @@
 const storage = require('../utils/storage');
-const { v4: uuidv4 } = require('uuid');
+const { generateId } = require('../models/schemas');
 
 /**
  * Get paginated packets
@@ -82,7 +82,7 @@ const createPacket = async (req, res) => {
     } = req.body;
 
     const packet = {
-      id: uuidv4(),
+      id: generateId(),
       timestamp: Date.now(),
       src_ip,
       dst_ip,

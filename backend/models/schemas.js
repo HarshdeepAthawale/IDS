@@ -132,6 +132,33 @@ const validateAlert = (alert) => {
   return errors;
 };
 
+const validateStats = (stats) => {
+  const errors = [];
+  
+  if (!stats || typeof stats !== 'object') {
+    errors.push('Stats must be an object');
+    return errors;
+  }
+  
+  if (typeof stats.packets_per_sec !== 'number') {
+    errors.push('Invalid or missing packets_per_sec');
+  }
+  
+  if (typeof stats.total_intrusions !== 'number') {
+    errors.push('Invalid or missing total_intrusions');
+  }
+  
+  if (typeof stats.traffic_mb_per_sec !== 'number') {
+    errors.push('Invalid or missing traffic_mb_per_sec');
+  }
+  
+  if (!Array.isArray(stats.top_suspicious_ips)) {
+    errors.push('Invalid or missing top_suspicious_ips');
+  }
+  
+  return errors;
+};
+
 // Helper functions
 const generateId = () => {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -170,6 +197,7 @@ module.exports = {
   alertTypes,
   validatePacket,
   validateAlert,
+  validateStats,
   generateId,
   formatTimestamp,
   formatBytes,
