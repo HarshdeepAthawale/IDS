@@ -5,6 +5,7 @@ const router = express.Router();
 const alertController = require('../controllers/alertController');
 const statsController = require('../controllers/statsController');
 const packetController = require('../controllers/packetController');
+const captureController = require('../controllers/captureController');
 
 // Alert routes
 router.get('/alerts', alertController.getAlerts);
@@ -20,6 +21,13 @@ router.get('/stats/summary', statsController.getSummary);
 router.get('/packets', packetController.getPackets);
 router.post('/packets', packetController.createPacket);
 router.get('/packets/recent', packetController.getRecentPackets);
+
+// Capture control routes
+router.get('/capture/status', captureController.getCaptureStatus);
+router.post('/capture/start', captureController.startCapture);
+router.post('/capture/stop', captureController.stopCapture);
+router.get('/capture/interfaces', captureController.getInterfaces);
+router.get('/capture/filters', captureController.getAvailableFilters);
 
 // System routes
 router.get('/status', (req, res) => {
