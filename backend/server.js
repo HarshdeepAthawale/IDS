@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const packetCaptureService = require('./services/packetCapture');
+const idsEngine = require('./services/idsEngine');
 
 // Load environment variables
 dotenv.config();
@@ -57,12 +58,21 @@ app.set('io', io);
 
 const PORT = process.env.PORT || 5000;
 
-// Initialize packet capture service
+// Initialize services
 packetCaptureService.initialize().then((success) => {
   if (success) {
     console.log('✅ Packet capture service initialized');
   } else {
     console.log('⚠️  Packet capture service initialization failed - some features may not work');
+  }
+});
+
+// Start IDS engine
+idsEngine.start().then((success) => {
+  if (success) {
+    console.log('✅ IDS Engine started');
+  } else {
+    console.log('⚠️  IDS Engine failed to start');
   }
 });
 
@@ -76,7 +86,10 @@ server.listen(PORT, () => {
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
-  packetCaptureService.stopCapture().then(() => {
+  Promise.all([
+    packetCaptureService.stopCapture(),
+    idsEngine.stop()
+  ]).then(() => {
     server.close(() => {
       console.log('Process terminated');
     });
@@ -85,7 +98,10 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down gracefully');
-  packetCaptureService.stopCapture().then(() => {
+  Promise.all([
+    packetCaptureService.stopCapture(),
+    idsEngine.stop()
+  ]).then(() => {
     server.close(() => {
       console.log('Process terminated');
     });
