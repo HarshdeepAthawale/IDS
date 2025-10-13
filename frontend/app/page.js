@@ -9,8 +9,13 @@ import LiveIndicator from '../components/LiveIndicator'
 import SystemStatus from '../components/SystemStatus'
 import PacketFlow from '../components/PacketFlow'
 import AlertFilters from '../components/AlertFilters'
+import ConnectionStatus from '../components/ConnectionStatus'
+import { ErrorNotificationContainer } from '../components/ErrorNotification'
 import { socketService } from '../lib/socket'
 import { apiService } from '../lib/api'
+import { dataManager } from '../lib/dataManager'
+import { connectionManager } from '../lib/connectionManager'
+import { ErrorHandler } from '../lib/errorHandler'
 
 export default function Dashboard() {
   const [alerts, setAlerts] = useState([])
@@ -26,29 +31,58 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [alertFilters, setAlertFilters] = useState({})
+  const [notifications, setNotifications] = useState([])
+  const [isOnline, setIsOnline] = useState(navigator.onLine)
 
   useEffect(() => {
+    // Initialize services
+    initializeServices()
+    
+    // Set up comprehensive event listeners
+    setupEventListeners()
+    
+    // Load initial data
+    loadInitialData()
+
+    // Cleanup on unmount
+    return () => {
+      cleanup()
+    }
+  }, [])
+
+  const initializeServices = () => {
     // Initialize socket connection
     socketService.connect()
     
-    // Set up event listeners
+    // Start connection manager
+    connectionManager.startHealthChecks()
+  }
+
+  const setupEventListeners = () => {
+    // Socket connection events
     socketService.onConnect(() => {
       setConnectionStatus('online')
       console.log('Connected to WebSocket server')
+      addNotification('success', 'Connected to real-time updates')
     })
 
-    socketService.onDisconnect(() => {
+    socketService.onDisconnect((reason) => {
       setConnectionStatus('offline')
-      console.log('Disconnected from WebSocket server')
+      console.log('Disconnected from WebSocket server:', reason)
+      addNotification('warning', 'Disconnected from real-time updates', reason)
+    })
+
+    socketService.on('connection-state', (data) => {
+      setConnectionStatus(data.state)
     })
 
     socketService.onError((error) => {
       setConnectionStatus('offline')
-      setError(`Connection error: ${error.message}`)
+      addNotification('error', 'Connection error', error.message)
       console.error('WebSocket error:', error)
     })
 
-    // Listen for real-time updates
+    // Data events with caching integration
     socketService.onNewAlert((alert) => {
       setAlerts(prev => [alert, ...prev].slice(0, 100)) // Keep last 100 alerts
       console.log('New alert received:', alert)
@@ -77,32 +111,83 @@ export default function Dashboard() {
       })
     })
 
-    // Load initial data
-    loadInitialData()
+    // Data manager events
+    dataManager.on('sync', (data) => {
+      console.log('Data synced:', data.type, data.source)
+    })
 
-    // Cleanup on unmount
-    return () => {
-      socketService.disconnect()
-    }
-  }, [])
+    // Connection manager events
+    connectionManager.on('network', (data) => {
+      setIsOnline(data.status === 'online')
+      if (data.status === 'offline') {
+        addNotification('error', 'Network connection lost')
+      } else if (data.status === 'online') {
+        addNotification('success', 'Network connection restored')
+      }
+    })
+
+    connectionManager.on('health', (data) => {
+      if (data.status === 'unhealthy') {
+        addNotification('warning', 'Backend health check failed', data.error)
+      }
+    })
+
+    connectionManager.on('reconnection', (data) => {
+      if (data.status === 'attempting') {
+        addNotification('info', `Attempting reconnection ${data.attempt}/${data.maxReconnectAttempts}`)
+      } else if (data.status === 'success') {
+        addNotification('success', 'Reconnection successful')
+      } else if (data.status === 'failed') {
+        addNotification('error', 'Reconnection failed', 'Please refresh the page')
+      }
+    })
+  }
+
+  const cleanup = () => {
+    socketService.disconnect()
+    connectionManager.stopHealthChecks()
+    dataManager.destroy()
+  }
 
   const loadInitialData = async () => {
     try {
       setLoading(true)
       setError(null)
 
-      // Load initial alerts
-      const alertsData = await apiService.getAlerts({ limit: 50 })
-      setAlerts(alertsData.alerts || [])
+      // Try to load cached data first
+      const cachedData = dataManager.getCachedData()
+      if (cachedData.alerts.length > 0) {
+        setAlerts(cachedData.alerts)
+      }
+      if (cachedData.stats.packets_per_sec > 0) {
+        setStats(cachedData.stats)
+      }
 
-      // Load initial stats
-      const statsData = await apiService.getStats()
-      setStats(statsData)
+      // Load fresh data
+      const dashboardData = await apiService.getDashboardData()
+      
+      if (dashboardData.alerts) {
+        setAlerts(dashboardData.alerts.alerts || [])
+      }
+      
+      if (dashboardData.stats) {
+        setStats(dashboardData.stats)
+      }
+
+      // Handle any errors from individual requests
+      if (dashboardData.errors.length > 0) {
+        dashboardData.errors.forEach(error => {
+          const errorInfo = ErrorHandler.handle(error, 'Initial Data Load')
+          addNotification('error', errorInfo.message, errorInfo.suggestion)
+        })
+      }
 
       setLoading(false)
     } catch (err) {
       console.error('Error loading initial data:', err)
-      setError(`Failed to load data: ${err.message}`)
+      const errorInfo = ErrorHandler.handle(err, 'Initial Data Load')
+      setError(errorInfo.message)
+      addNotification('error', errorInfo.message, errorInfo.suggestion)
       setLoading(false)
     }
   }
@@ -113,6 +198,28 @@ export default function Dashboard() {
 
   const handleAlertFilterChange = (filters) => {
     setAlertFilters(filters)
+  }
+
+  const addNotification = (type, message, suggestion = null) => {
+    const notification = {
+      id: Date.now().toString(),
+      type,
+      message,
+      suggestion,
+      severity: type === 'error' ? 'high' : type === 'warning' ? 'medium' : 'low',
+      timestamp: new Date().toISOString(),
+      dismissed: false
+    }
+    
+    setNotifications(prev => [notification, ...prev].slice(0, 5)) // Keep last 5 notifications
+  }
+
+  const dismissNotification = (id) => {
+    setNotifications(prev => prev.filter(n => n.id !== id))
+  }
+
+  const handleRetry = () => {
+    loadInitialData()
   }
 
   if (loading) {
@@ -128,21 +235,48 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-dark-bg">
+      {/* Error Notifications */}
+      <ErrorNotificationContainer 
+        errors={notifications}
+        onDismissError={dismissNotification}
+      />
+      
       <Header 
         connectionStatus={connectionStatus}
         onRefresh={refreshData}
       />
       
       <main className="container mx-auto px-4 py-6">
+        {/* Global Error Display */}
         {error && (
           <div className="mb-6 p-4 bg-red-900/20 border border-red-800/30 rounded-lg">
-            <p className="text-red-400">{error}</p>
-            <button 
-              onClick={() => setError(null)}
-              className="mt-2 text-sm text-red-300 hover:text-red-200"
-            >
-              Dismiss
-            </button>
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-red-400 font-medium">{error}</p>
+                <button 
+                  onClick={handleRetry}
+                  className="mt-2 text-sm text-red-300 hover:text-red-200 mr-4"
+                >
+                  Retry
+                </button>
+                <button 
+                  onClick={() => setError(null)}
+                  className="mt-2 text-sm text-red-300 hover:text-red-200"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Network Status Warning */}
+        {!isOnline && (
+          <div className="mb-6 p-4 bg-yellow-900/20 border border-yellow-800/30 rounded-lg">
+            <div className="flex items-center space-x-2">
+              <span className="text-yellow-400">⚠️</span>
+              <p className="text-yellow-400">You are currently offline. Some features may not work properly.</p>
+            </div>
           </div>
         )}
 
@@ -198,9 +332,14 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* System Status */}
-        <div className="mb-8">
-          <SystemStatus />
+        {/* System Status and Connection Info */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+          <div className="lg:col-span-3">
+            <SystemStatus />
+          </div>
+          <div>
+            <ConnectionStatus />
+          </div>
         </div>
 
         {/* Charts and Tables */}

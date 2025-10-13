@@ -1,4 +1,7 @@
 import { io } from 'socket.io-client'
+import { connectionManager } from './connectionManager'
+import { dataManager } from './dataManager'
+import { ErrorHandler } from './errorHandler'
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
@@ -10,6 +13,9 @@ class SocketService {
     this.maxReconnectAttempts = 5
     this.reconnectInterval = 5000
     this.eventListeners = new Map()
+    this.connectionState = 'disconnected'
+    this.lastConnectedAt = null
+    this.heartbeatInterval = null
   }
 
   connect() {
@@ -19,6 +25,8 @@ class SocketService {
     }
 
     console.log('Connecting to WebSocket server...')
+    this.connectionState = 'connecting'
+    this.emit('connection-state', { state: 'connecting' })
     
     this.socket = io(SOCKET_URL, {
       autoConnect: true,
@@ -26,9 +34,11 @@ class SocketService {
       reconnectionAttempts: this.maxReconnectAttempts,
       reconnectionDelay: this.reconnectInterval,
       timeout: 10000,
+      forceNew: true
     })
 
     this.setupEventListeners()
+    this.startHeartbeat()
   }
 
   setupEventListeners() {
@@ -38,38 +48,81 @@ class SocketService {
     this.socket.on('connect', () => {
       console.log('Connected to WebSocket server')
       this.isConnected = true
+      this.connectionState = 'connected'
+      this.lastConnectedAt = Date.now()
       this.reconnectAttempts = 0
+      connectionManager.resetReconnectAttempts()
+      
       this.emit('connect')
+      this.emit('connection-state', { state: 'connected', timestamp: this.lastConnectedAt })
+      
+      // Request initial data
+      this.requestStats()
+      this.requestAlerts()
     })
 
     this.socket.on('disconnect', (reason) => {
       console.log('Disconnected from WebSocket server:', reason)
       this.isConnected = false
+      this.connectionState = 'disconnected'
+      this.stopHeartbeat()
+      
       this.emit('disconnect', reason)
+      this.emit('connection-state', { state: 'disconnected', reason })
+      
+      // Attempt reconnection if not intentional
+      if (reason !== 'io client disconnect') {
+        this.attemptReconnection()
+      }
     })
 
     this.socket.on('connect_error', (error) => {
       console.error('WebSocket connection error:', error)
       this.isConnected = false
+      this.connectionState = 'error'
       this.reconnectAttempts++
-      this.emit('error', error)
+      
+      const errorInfo = ErrorHandler.handle(error, 'WebSocket Connection')
+      this.emit('error', errorInfo)
+      this.emit('connection-state', { state: 'error', error: errorInfo })
     })
 
-    // Data events
+    // Data events with data management integration
     this.socket.on('new-alert', (alert) => {
       console.log('New alert received:', alert)
+      
+      // Validate alert data
+      if (dataManager.validateAlert(alert)) {
+        const currentAlerts = dataManager.getAlerts()
+        const updatedAlerts = [alert, ...currentAlerts].slice(0, 1000) // Keep last 1000 alerts
+        dataManager.updateAlerts(updatedAlerts, 'websocket')
+      }
+      
       this.emit('new-alert', alert)
     })
 
     this.socket.on('stats-update', (stats) => {
+      // Validate stats data
+      if (dataManager.validateStats(stats)) {
+        dataManager.updateStats(stats, 'websocket')
+      }
+      
       this.emit('stats-update', stats)
     })
 
     this.socket.on('packet-stream', (packet) => {
+      const currentPackets = dataManager.getPackets()
+      const updatedPackets = [...currentPackets, packet].slice(-100) // Keep last 100 packets
+      dataManager.updatePackets(updatedPackets, 'websocket')
+      
       this.emit('packet-stream', packet)
     })
 
     this.socket.on('alerts-data', (data) => {
+      if (data.alerts && Array.isArray(data.alerts)) {
+        dataManager.updateAlerts(data.alerts, 'websocket')
+      }
+      
       this.emit('alerts-data', data)
     })
 
@@ -157,17 +210,61 @@ class SocketService {
 
   // Connection status
   getConnectionStatus() {
-    if (!this.socket) return 'disconnected'
-    if (this.socket.connected) return 'connected'
-    return 'connecting'
+    return this.connectionState
+  }
+  
+  // Get detailed connection info
+  getConnectionInfo() {
+    return {
+      state: this.connectionState,
+      isConnected: this.isConnected,
+      lastConnectedAt: this.lastConnectedAt,
+      reconnectAttempts: this.reconnectAttempts,
+      maxReconnectAttempts: this.maxReconnectAttempts,
+      uptime: this.lastConnectedAt ? Date.now() - this.lastConnectedAt : 0
+    }
+  }
+  
+  // Heartbeat system
+  startHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval)
+    }
+    
+    this.heartbeatInterval = setInterval(() => {
+      if (this.socket?.connected) {
+        this.socket.emit('ping')
+      }
+    }, 30000) // Send ping every 30 seconds
+  }
+  
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval)
+      this.heartbeatInterval = null
+    }
+  }
+  
+  // Enhanced reconnection logic
+  async attemptReconnection() {
+    try {
+      const success = await connectionManager.attemptReconnection('websocket')
+      if (success) {
+        this.connect()
+      }
+    } catch (error) {
+      console.error('Reconnection failed:', error)
+    }
   }
 
   // Disconnect
   disconnect() {
     if (this.socket) {
+      this.stopHeartbeat()
       this.socket.disconnect()
       this.socket = null
       this.isConnected = false
+      this.connectionState = 'disconnected'
       this.eventListeners.clear()
       console.log('Disconnected from WebSocket server')
     }
@@ -179,6 +276,15 @@ class SocketService {
     setTimeout(() => {
       this.connect()
     }, 1000)
+  }
+  
+  // Get cached data
+  getCachedData() {
+    return {
+      alerts: dataManager.getAlerts(),
+      stats: dataManager.getStats(),
+      packets: dataManager.getPackets()
+    }
   }
 }
 
