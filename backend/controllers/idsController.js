@@ -1,5 +1,5 @@
 const idsEngine = require('../services/idsEngine');
-const { getThresholds, updateThreshold, validateThreshold, getDetectionTypes } = require('../config/thresholds');
+const { getThresholds: getThresholdConfig, updateThreshold, validateThreshold, getDetectionTypes } = require('../config/thresholds');
 
 /**
  * Get IDS engine status
@@ -64,7 +64,7 @@ const stopEngine = async (req, res) => {
  */
 const getThresholds = async (req, res) => {
   try {
-    const thresholds = getThresholds();
+    const thresholds = getThresholdConfig();
     const detectionTypes = getDetectionTypes();
     
     res.json({

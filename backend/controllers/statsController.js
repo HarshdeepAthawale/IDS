@@ -288,3 +288,10 @@ const getSystemHealth = async (req, res) => {
     res.status(500).json({ error: 'Failed to retrieve system health' });
   }
 };
+
+module.exports = {
+  getStats,
+  getSummary,
+  getHistoricalStats,
+  getSystemHealth
+};

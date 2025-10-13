@@ -386,7 +386,12 @@ class IDSEngine {
 
     // Clean up port access
     for (const [srcIP, ports] of this.ipPortAccess) {
-      if (now - data.lastSeen > maxAge) {
+      // Get the last seen time from packet counts or volume counts
+      const packetData = this.ipPacketCounts.get(srcIP);
+      const volumeData = this.ipVolumeCounts.get(srcIP);
+      const lastSeen = packetData?.lastSeen || volumeData?.lastSeen;
+      
+      if (lastSeen && (now - lastSeen > maxAge)) {
         this.ipPortAccess.delete(srcIP);
       }
     }

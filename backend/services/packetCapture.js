@@ -1,4 +1,12 @@
-const pcap = require('pcap');
+let pcap;
+try {
+  pcap = require('pcap');
+} catch (error) {
+  console.warn('⚠️  Pcap module not available - packet capture will be disabled');
+  console.warn('💡 Install Visual Studio Build Tools and rebuild pcap module for full functionality');
+  pcap = null;
+}
+
 const storage = require('../utils/storage');
 const { generateId, validatePacket } = require('../models/schemas');
 
@@ -21,6 +29,16 @@ class PacketCaptureService {
   async initialize() {
     try {
       console.log('🔍 Initializing packet capture service...');
+      
+      if (!pcap) {
+        console.log('⚠️  Pcap module not available - running in simulation mode');
+        this.interfaces = [
+          { name: 'eth0', description: 'Simulated Ethernet Interface' },
+          { name: 'wlan0', description: 'Simulated Wireless Interface' }
+        ];
+        console.log(`📡 Found ${this.interfaces.length} simulated network interfaces`);
+        return true;
+      }
       
       // Get available network interfaces
       this.interfaces = pcap.findalldevs();
@@ -47,6 +65,17 @@ class PacketCaptureService {
       if (this.isCapturing) {
         console.log('⚠️  Packet capture is already running');
         return false;
+      }
+
+      if (!pcap) {
+        console.log('🚀 Starting simulated packet capture...');
+        console.log(`🔍 Filter: ${filter || 'none (capture all)'}`);
+        
+        this.isCapturing = true;
+        this.startSimulatedCapture();
+        
+        console.log('✅ Simulated packet capture started successfully');
+        return true;
       }
 
       // Select interface
@@ -115,6 +144,12 @@ class PacketCaptureService {
         this.saveTimer = null;
       }
 
+      // Stop simulated capture timer
+      if (this.simulatedTimer) {
+        clearInterval(this.simulatedTimer);
+        this.simulatedTimer = null;
+      }
+
       // Save remaining packets in buffer
       if (this.packetBuffer.length > 0) {
         await this.saveBufferedPackets();
@@ -161,10 +196,78 @@ class PacketCaptureService {
   }
 
   /**
+   * Start simulated packet capture for testing
+   */
+  startSimulatedCapture() {
+    this.simulatedTimer = setInterval(() => {
+      this.generateSimulatedPacket();
+    }, 1000); // Generate a packet every second
+  }
+
+  /**
+   * Generate simulated packet for testing
+   */
+  generateSimulatedPacket() {
+    const protocols = ['TCP', 'UDP', 'ICMP'];
+    const protocols_weights = [0.7, 0.2, 0.1]; // TCP most common
+    
+    const random = Math.random();
+    let protocol = 'TCP';
+    if (random < protocols_weights[1]) protocol = 'UDP';
+    else if (random < protocols_weights[1] + protocols_weights[2]) protocol = 'ICMP';
+
+    const src_ip = this.generateRandomIP();
+    const dst_ip = this.generateRandomIP();
+    
+    let src_port = null;
+    let dst_port = null;
+    let flags = '';
+
+    if (protocol === 'TCP') {
+      src_port = Math.floor(Math.random() * 65535) + 1;
+      dst_port = Math.floor(Math.random() * 1000) + 80; // Common ports
+      flags = Math.random() > 0.5 ? 'SYN,ACK' : 'ACK';
+    } else if (protocol === 'UDP') {
+      src_port = Math.floor(Math.random() * 65535) + 1;
+      dst_port = Math.floor(Math.random() * 1000) + 53; // DNS
+      flags = 'UDP';
+    } else {
+      flags = 'ICMP';
+    }
+
+    const simulatedPacket = {
+      id: generateId(),
+      timestamp: Date.now(),
+      src_ip,
+      dst_ip,
+      protocol,
+      src_port,
+      dst_port,
+      size: Math.floor(Math.random() * 1500) + 64,
+      flags,
+      source: 'simulation'
+    };
+
+    this.handlePacket(simulatedPacket);
+  }
+
+  /**
+   * Generate random IP address
+   */
+  generateRandomIP() {
+    return `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
+  }
+
+  /**
    * Parse raw packet into structured data
    */
   parsePacket(rawPacket) {
     try {
+      if (!pcap) {
+        // Return the simulated packet as-is
+        return rawPacket;
+      }
+
       const packet = pcap.decode.packet(rawPacket);
       
       // Extract basic packet info
@@ -336,7 +439,16 @@ class PacketCaptureService {
       return false;
     }
     
-    console.log(`🔍 Filter set to: ${filter}`);
+    // Validate filter if provided
+    if (filter && typeof filter === 'string') {
+      // Basic validation - check for common issues
+      if (filter.length > 1000) {
+        console.log('⚠️  Filter too long (max 1000 characters)');
+        return false;
+      }
+    }
+    
+    console.log(`🔍 Filter set to: ${filter || 'none'}`);
     return true;
   }
 

@@ -211,8 +211,8 @@ const getPacketStats = async (req, res) => {
     const sizes = recentPackets.map(p => p.size || 0);
     const totalBytes = sizes.reduce((sum, size) => sum + size, 0);
     const avgSize = sizes.length > 0 ? totalBytes / sizes.length : 0;
-    const maxSize = Math.max(...sizes);
-    const minSize = Math.min(...sizes.filter(s => s > 0));
+    const maxSize = sizes.length > 0 ? Math.max(...sizes) : 0;
+    const minSize = sizes.length > 0 ? Math.min(...sizes.filter(s => s > 0)) : 0;
     
     res.json({
       time_range,
@@ -313,4 +313,12 @@ const exportPackets = async (req, res) => {
     console.error('Error exporting packets:', error);
     res.status(500).json({ error: 'Failed to export packets' });
   }
+};
+
+module.exports = {
+  getPackets,
+  createPacket,
+  getRecentPackets,
+  getPacketStats,
+  exportPackets
 };

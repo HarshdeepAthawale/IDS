@@ -77,11 +77,19 @@ idsEngine.start(webSocketService).then((success) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`🚀 IDS Backend Server running on port ${PORT}`);
-  console.log(`📡 WebSocket server ready for connections`);
-  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
-  console.log(`📊 API endpoints: http://localhost:${PORT}/api`);
-  console.log(`🔗 WebSocket connection: ws://localhost:${PORT}`);
+  console.log('\n' + '='.repeat(60));
+  console.log('🛡️  CUSTOM INTRUSION DETECTION SYSTEM');
+  console.log('='.repeat(60));
+  console.log(`🚀 Backend Server: http://localhost:${PORT}`);
+  console.log(`📡 WebSocket Server: ws://localhost:${PORT}`);
+  console.log(`🌐 Health Check: http://localhost:${PORT}/health`);
+  console.log(`📊 API Endpoints: http://localhost:${PORT}/api`);
+  console.log(`🖥️  Frontend Dashboard: http://localhost:3000`);
+  console.log('='.repeat(60));
+  console.log('✅ System ready for network monitoring!');
+  console.log('💡 Run "npm run test" to verify all components');
+  console.log('🔧 Check README.md for usage instructions');
+  console.log('='.repeat(60) + '\n');
 });
 
 // Graceful shutdown

@@ -40,7 +40,7 @@ router.get('/capture/filters', captureController.getAvailableFilters);
 router.get('/packets/status', captureController.getCaptureStatus);
 router.post('/packets/start', captureController.startCapture);
 router.post('/packets/stop', captureController.stopCapture);
-router.get('/interfaces', captureController.getInterfaces);
+router.get('/packets/interfaces', captureController.getInterfaces);
 
 // IDS Engine control routes
 router.get('/ids/status', idsController.getEngineStatus);
@@ -49,6 +49,9 @@ router.post('/ids/stop', idsController.stopEngine);
 router.get('/ids/thresholds', idsController.getThresholds);
 router.put('/ids/thresholds', idsController.updateThresholds);
 router.post('/ids/reset', idsController.resetEngine);
+
+// Additional packet routes for frontend compatibility
+router.post('/packets/inject', packetController.createPacket);
 
 // System routes
 router.get('/status', (req, res) => {

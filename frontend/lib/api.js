@@ -150,10 +150,18 @@ export const apiService = {
     return response.data
   },
 
+  // Update alert status
+  async updateAlertStatus(alertId, status, notes = null) {
+    const response = await api.put(`/api/alerts/${alertId}`, {
+      status,
+      notes
+    })
+    return response.data
+  },
+
   // Mark alert as resolved
   async resolveAlert(alertId) {
-    const response = await api.patch(`/api/alerts/${alertId}/resolve`)
-    return response.data
+    return this.updateAlertStatus(alertId, 'resolved')
   },
 
   // Get system information
