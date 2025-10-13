@@ -2,21 +2,15 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { createServer } = require('http');
-const { Server } = require('socket.io');
 const packetCaptureService = require('./services/packetCapture');
 const idsEngine = require('./services/idsEngine');
+const WebSocketService = require('./services/websocket');
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
 const server = createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
-  }
-});
 
 // Middleware
 app.use(cors({
@@ -53,8 +47,14 @@ app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Make io available to other modules
-app.set('io', io);
+// Initialize WebSocket service
+const webSocketService = new WebSocketService(server);
+
+// Make WebSocket service available to other modules
+app.set('webSocketService', webSocketService);
+
+// Connect WebSocket service to packet capture service
+packetCaptureService.setWebSocketService(webSocketService);
 
 const PORT = process.env.PORT || 5000;
 
@@ -67,8 +67,8 @@ packetCaptureService.initialize().then((success) => {
   }
 });
 
-// Start IDS engine
-idsEngine.start().then((success) => {
+// Start IDS engine with WebSocket integration
+idsEngine.start(webSocketService).then((success) => {
   if (success) {
     console.log('✅ IDS Engine started');
   } else {
@@ -81,6 +81,7 @@ server.listen(PORT, () => {
   console.log(`📡 WebSocket server ready for connections`);
   console.log(`🌐 Health check: http://localhost:${PORT}/health`);
   console.log(`📊 API endpoints: http://localhost:${PORT}/api`);
+  console.log(`🔗 WebSocket connection: ws://localhost:${PORT}`);
 });
 
 // Graceful shutdown
@@ -88,7 +89,8 @@ process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
   Promise.all([
     packetCaptureService.stopCapture(),
-    idsEngine.stop()
+    idsEngine.stop(),
+    webSocketService.destroy()
   ]).then(() => {
     server.close(() => {
       console.log('Process terminated');
@@ -100,7 +102,8 @@ process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down gracefully');
   Promise.all([
     packetCaptureService.stopCapture(),
-    idsEngine.stop()
+    idsEngine.stop(),
+    webSocketService.destroy()
   ]).then(() => {
     server.close(() => {
       console.log('Process terminated');
@@ -108,4 +111,4 @@ process.on('SIGINT', () => {
   });
 });
 
-module.exports = { app, server, io };
+module.exports = { app, server, webSocketService };

@@ -39,7 +39,7 @@ class IDSEngine {
   /**
    * Start the IDS engine
    */
-  async start() {
+  async start(webSocketService = null) {
     if (this.isRunning) {
       console.log('⚠️  IDS Engine is already running');
       return false;
@@ -50,6 +50,9 @@ class IDSEngine {
     console.log(`  - DoS: ${this.config.dos.threshold} packets/sec in ${this.config.dos.timeWindow}ms`);
     console.log(`  - Port Scan: ${this.config.port_scan.threshold} ports in ${this.config.port_scan.timeWindow}ms`);
     console.log(`  - Suspicious Volume: ${this.config.suspicious_volume.threshold}MB in ${this.config.suspicious_volume.timeWindow}ms`);
+
+    // Store WebSocket service reference
+    this.webSocketService = webSocketService;
 
     this.isRunning = true;
     this.startAnalysisTimer();
@@ -327,12 +330,25 @@ class IDSEngine {
    */
   emitAlertEvent(alert) {
     try {
-      const io = require('../server').io;
-      if (io) {
-        io.emit('new-alert', alert);
+      if (this.webSocketService) {
+        this.webSocketService.broadcastNewAlert(alert);
+        console.log(`📡 Alert broadcasted via WebSocket: ${alert.type} from ${alert.source_ip}`);
       }
     } catch (error) {
-      // WebSocket not available yet, ignore
+      console.error('❌ Error broadcasting alert via WebSocket:', error);
+    }
+  }
+
+  /**
+   * Emit packet stream event via WebSocket
+   */
+  emitPacketStream(packet) {
+    try {
+      if (this.webSocketService) {
+        this.webSocketService.broadcastPacketStream(packet);
+      }
+    } catch (error) {
+      console.error('❌ Error broadcasting packet stream via WebSocket:', error);
     }
   }
 

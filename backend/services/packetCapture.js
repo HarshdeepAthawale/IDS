@@ -11,6 +11,8 @@ class PacketCaptureService {
     this.bufferSize = 100; // Buffer packets before saving
     this.saveInterval = 5000; // Save every 5 seconds
     this.saveTimer = null;
+    this.webSocketService = null;
+    this.streamPackets = false; // Whether to stream packets via WebSocket
   }
 
   /**
@@ -142,6 +144,11 @@ class PacketCaptureService {
       const parsedPacket = this.parsePacket(rawPacket);
       if (parsedPacket) {
         this.packetBuffer.push(parsedPacket);
+        
+        // Broadcast packet stream if enabled
+        if (this.streamPackets && this.webSocketService) {
+          this.webSocketService.broadcastPacketStream(parsedPacket);
+        }
         
         // Save if buffer is full
         if (this.packetBuffer.length >= this.bufferSize) {
@@ -331,6 +338,22 @@ class PacketCaptureService {
     
     console.log(`🔍 Filter set to: ${filter}`);
     return true;
+  }
+
+  /**
+   * Set WebSocket service for broadcasting
+   */
+  setWebSocketService(webSocketService) {
+    this.webSocketService = webSocketService;
+    console.log('📡 WebSocket service connected to packet capture');
+  }
+
+  /**
+   * Enable/disable packet streaming via WebSocket
+   */
+  setPacketStreaming(enabled) {
+    this.streamPackets = enabled;
+    console.log(`📡 Packet streaming ${enabled ? 'enabled' : 'disabled'}`);
   }
 }
 
