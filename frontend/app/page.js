@@ -6,6 +6,9 @@ import AlertTable from '../components/AlertTable'
 import PacketGraph from '../components/PacketGraph'
 import StatsCard from '../components/StatsCard'
 import LiveIndicator from '../components/LiveIndicator'
+import SystemStatus from '../components/SystemStatus'
+import PacketFlow from '../components/PacketFlow'
+import AlertFilters from '../components/AlertFilters'
 import { socketService } from '../lib/socket'
 import { apiService } from '../lib/api'
 
@@ -18,9 +21,11 @@ export default function Dashboard() {
     traffic_mb_per_sec: 0
   })
   const [packetData, setPacketData] = useState([])
+  const [packetFlows, setPacketFlows] = useState([])
   const [connectionStatus, setConnectionStatus] = useState('connecting')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [alertFilters, setAlertFilters] = useState({})
 
   useEffect(() => {
     // Initialize socket connection
@@ -65,7 +70,11 @@ export default function Dashboard() {
 
     socketService.onPacketStream((packet) => {
       console.log('Packet stream received:', packet)
-      // Could be used for detailed packet visualization
+      // Update packet flows for visualization
+      setPacketFlows(prev => {
+        const newFlows = [...prev, packet].slice(-100) // Keep last 100 packets
+        return newFlows
+      })
     })
 
     // Load initial data
@@ -100,6 +109,10 @@ export default function Dashboard() {
 
   const refreshData = () => {
     loadInitialData()
+  }
+
+  const handleAlertFilterChange = (filters) => {
+    setAlertFilters(filters)
   }
 
   if (loading) {
@@ -185,34 +198,54 @@ export default function Dashboard() {
           />
         </div>
 
+        {/* System Status */}
+        <div className="mb-8">
+          <SystemStatus />
+        </div>
+
         {/* Charts and Tables */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
           {/* Packet Rate Chart */}
-          <div className="card">
+          <div className="lg:col-span-2 card">
             <h2 className="text-xl font-semibold mb-4 text-dark-text">Packet Rate</h2>
             <PacketGraph data={packetData} />
           </div>
 
-          {/* Top Suspicious IPs */}
+          {/* Packet Flows */}
           <div className="card">
-            <h2 className="text-xl font-semibold mb-4 text-dark-text">Top Suspicious IPs</h2>
-            <div className="space-y-3">
-              {stats.top_suspicious_ips?.length > 0 ? (
-                stats.top_suspicious_ips.map((ip, index) => (
-                  <div key={ip.ip} className="flex items-center justify-between p-3 bg-dark-surface rounded-lg">
-                    <div className="flex items-center space-x-3">
-                      <span className="text-sm font-mono text-dark-text-muted">#{index + 1}</span>
-                      <span className="font-mono text-dark-text">{ip.ip}</span>
-                    </div>
-                    <span className="text-sm font-semibold text-red-400">{ip.count} alerts</span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-dark-text-muted text-center py-8">No suspicious IPs detected</p>
-              )}
-            </div>
+            <h2 className="text-xl font-semibold mb-4 text-dark-text">Active Flows</h2>
+            <PacketFlow packets={packetFlows} />
           </div>
         </div>
+
+        {/* Top Suspicious IPs */}
+        <div className="card mb-8">
+          <h2 className="text-xl font-semibold mb-4 text-dark-text">Top Suspicious IPs</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {stats.top_suspicious_ips?.length > 0 ? (
+              stats.top_suspicious_ips.map((ip, index) => (
+                <div key={ip.ip} className="flex items-center justify-between p-3 bg-dark-surface rounded-lg border border-dark-border">
+                  <div className="flex items-center space-x-3">
+                    <span className="text-sm font-mono text-dark-text-muted bg-dark-card px-2 py-1 rounded">#{index + 1}</span>
+                    <span className="font-mono text-dark-text">{ip.ip}</span>
+                  </div>
+                  <span className="text-sm font-semibold text-red-400">{ip.count} alerts</span>
+                </div>
+              ))
+            ) : (
+              <div className="col-span-full text-center py-8">
+                <div className="text-4xl mb-2">🛡️</div>
+                <p className="text-dark-text-muted">No suspicious IPs detected</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Alert Filters */}
+        <AlertFilters 
+          onFilterChange={handleAlertFilterChange}
+          currentFilters={alertFilters}
+        />
 
         {/* Alerts Table */}
         <div className="card">
@@ -222,7 +255,11 @@ export default function Dashboard() {
               {alerts.length} alert{alerts.length !== 1 ? 's' : ''}
             </span>
           </div>
-          <AlertTable alerts={alerts} />
+          <AlertTable 
+            alerts={alerts} 
+            onFilterChange={handleAlertFilterChange}
+            currentFilters={alertFilters}
+          />
         </div>
       </main>
     </div>
