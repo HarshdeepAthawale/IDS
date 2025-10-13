@@ -10,16 +10,22 @@ const idsController = require('../controllers/idsController');
 
 // Alert routes
 router.get('/alerts', alertController.getAlerts);
+router.get('/alerts/stats', alertController.getAlertStats);
 router.get('/alerts/:id', alertController.getAlertById);
+router.put('/alerts/:id', alertController.updateAlertStatus);
 router.delete('/alerts/:id', alertController.deleteAlert);
 router.delete('/alerts', alertController.clearAllAlerts);
 
 // Statistics routes
 router.get('/stats', statsController.getStats);
 router.get('/stats/summary', statsController.getSummary);
+router.get('/stats/historical', statsController.getHistoricalStats);
+router.get('/stats/health', statsController.getSystemHealth);
 
 // Packet routes
 router.get('/packets', packetController.getPackets);
+router.get('/packets/stats', packetController.getPacketStats);
+router.get('/packets/export', packetController.exportPackets);
 router.post('/packets', packetController.createPacket);
 router.get('/packets/recent', packetController.getRecentPackets);
 

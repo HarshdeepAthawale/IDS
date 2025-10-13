@@ -150,6 +150,17 @@ const clearAllAlerts = async () => {
   }
 };
 
+const saveAlerts = async (alerts) => {
+  try {
+    await initializeFiles();
+    await fs.writeFile(ALERTS_FILE, JSON.stringify(alerts, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error saving alerts:', error);
+    return false;
+  }
+};
+
 // Utility functions
 const getFileStats = async () => {
   try {
@@ -183,6 +194,7 @@ module.exports = {
   // Alert operations
   getAlerts,
   saveAlert,
+  saveAlerts,
   deleteAlert,
   clearAllAlerts,
   
