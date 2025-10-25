@@ -19,50 +19,33 @@ export default function InsiderPage() {
   const [filterRisk, setFilterRisk] = useState<"all" | "critical" | "high" | "medium" | "low">("all")
 
   useEffect(() => {
-    // Simulate fetching insider threats from Flask backend
-    const mockThreats: InsiderThreat[] = [
-      {
-        id: "1",
-        timestamp: new Date(Date.now() - 2 * 60000).toISOString(),
-        user: "john.doe@company.com",
-        activity: "Accessed sensitive files outside work hours",
-        riskLevel: "high",
-        details: "User accessed HR database at 2:30 AM from home IP",
-      },
-      {
-        id: "2",
-        timestamp: new Date(Date.now() - 15 * 60000).toISOString(),
-        user: "jane.smith@company.com",
-        activity: "Downloaded large dataset to USB",
-        riskLevel: "critical",
-        details: "2.3GB of customer data transferred to external device",
-      },
-      {
-        id: "3",
-        timestamp: new Date(Date.now() - 30 * 60000).toISOString(),
-        user: "bob.wilson@company.com",
-        activity: "Multiple failed login attempts",
-        riskLevel: "medium",
-        details: "15 failed attempts to access admin panel in 5 minutes",
-      },
-      {
-        id: "4",
-        timestamp: new Date(Date.now() - 45 * 60000).toISOString(),
-        user: "alice.johnson@company.com",
-        activity: "Unusual email forwarding rule created",
-        riskLevel: "high",
-        details: "New forwarding rule to external email address detected",
-      },
-      {
-        id: "5",
-        timestamp: new Date(Date.now() - 60 * 60000).toISOString(),
-        user: "charlie.brown@company.com",
-        activity: "Shared confidential document",
-        riskLevel: "critical",
-        details: "Financial report shared with external domain",
-      },
-    ]
-    setThreats(mockThreats)
+    // Fetch insider threats from Flask backend
+    const fetchInsiderThreats = async () => {
+      try {
+        const response = await fetch('/api/insider/summary')
+        if (response.ok) {
+          const data = await response.json()
+          // Transform Flask activities to match our interface
+          const transformedThreats = (data.activities || []).map((activity: any) => ({
+            id: activity.id.toString(),
+            timestamp: activity.timestamp,
+            user: activity.username,
+            activity: activity.activity_type,
+            riskLevel: activity.severity,
+            details: activity.description
+          }))
+          setThreats(transformedThreats)
+        } else {
+          console.error('Failed to fetch insider threats')
+          setThreats([])
+        }
+      } catch (error) {
+        console.error('Error fetching insider threats:', error)
+        setThreats([])
+      }
+    }
+
+    fetchInsiderThreats()
   }, [])
 
   const filteredThreats = threats.filter((threat) => {

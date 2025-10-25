@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional
 from collections import defaultdict
 from sqlalchemy import and_, func, desc
 from models.db_models import db, Alert, TrafficStat, UserActivity, WhitelistRule
+from .cache import CacheService, CachePrefixes, CacheTTL
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,10 @@ class DatabaseLogger:
         self.traffic_stats_cache = defaultdict(int)
         self.last_traffic_flush = datetime.utcnow()
         
-        logger.info("DatabaseLogger initialized")
+        # Initialize cache service
+        self.cache = CacheService(config)
+        
+        logger.info("DatabaseLogger initialized with caching")
     
     def log_alert(self, detection_result: Dict[str, Any], packet_data: Dict[str, Any]) -> Optional[Alert]:
         """
@@ -311,7 +315,7 @@ class DatabaseLogger:
     
     def get_recent_alerts(self, limit: int = 100, **filters) -> List[Alert]:
         """
-        Get recent alerts with optional filtering
+        Get recent alerts with optional filtering and caching
         
         Args:
             limit: Maximum number of alerts to return
@@ -321,6 +325,15 @@ class DatabaseLogger:
             List of Alert objects
         """
         try:
+            # Create cache key based on filters
+            cache_key = f"recent_{limit}_{hash(str(sorted(filters.items())))}"
+            
+            # Try to get from cache first
+            cached_result = self.cache.get(CachePrefixes.ALERTS, cache_key)
+            if cached_result:
+                logger.debug("Returning alerts from cache")
+                return [Alert(**alert_data) for alert_data in cached_result]
+            
             query = Alert.query
             
             # Apply filters
@@ -345,7 +358,13 @@ class DatabaseLogger:
             # Order by timestamp (newest first) and limit
             query = query.order_by(desc(Alert.timestamp)).limit(limit)
             
-            return query.all()
+            alerts = query.all()
+            
+            # Cache the result
+            alert_dicts = [alert.to_dict() for alert in alerts]
+            self.cache.set(CachePrefixes.ALERTS, cache_key, alert_dicts, CacheTTL.SHORT)
+            
+            return alerts
             
         except Exception as e:
             logger.error(f"Error getting recent alerts: {e}")
@@ -353,7 +372,7 @@ class DatabaseLogger:
     
     def get_traffic_stats(self, limit: int = 24) -> List[TrafficStat]:
         """
-        Get recent traffic statistics
+        Get recent traffic statistics with caching
         
         Args:
             limit: Number of recent records to return
@@ -362,7 +381,21 @@ class DatabaseLogger:
             List of TrafficStat objects
         """
         try:
-            return TrafficStat.query.order_by(desc(TrafficStat.timestamp)).limit(limit).all()
+            cache_key = f"recent_{limit}"
+            
+            # Try cache first
+            cached_result = self.cache.get(CachePrefixes.TRAFFIC_STATS, cache_key)
+            if cached_result:
+                logger.debug("Returning traffic stats from cache")
+                return [TrafficStat(**stat_data) for stat_data in cached_result]
+            
+            stats = TrafficStat.query.order_by(desc(TrafficStat.timestamp)).limit(limit).all()
+            
+            # Cache the result
+            stat_dicts = [stat.to_dict() for stat in stats]
+            self.cache.set(CachePrefixes.TRAFFIC_STATS, cache_key, stat_dicts, CacheTTL.SHORT)
+            
+            return stats
             
         except Exception as e:
             logger.error(f"Error getting traffic stats: {e}")
@@ -440,12 +473,20 @@ class DatabaseLogger:
     
     def get_alert_summary(self) -> Dict[str, Any]:
         """
-        Get alert summary statistics
+        Get alert summary statistics with caching
         
         Returns:
             Dictionary with alert statistics
         """
         try:
+            cache_key = "summary"
+            
+            # Try cache first
+            cached_result = self.cache.get(CachePrefixes.ALERT_SUMMARY, cache_key)
+            if cached_result:
+                logger.debug("Returning alert summary from cache")
+                return cached_result
+            
             current_time = datetime.utcnow()
             
             # Recent alerts (last 24 hours)
@@ -465,13 +506,18 @@ class DatabaseLogger:
                 Alert.severity, func.count(Alert.id)
             ).filter(Alert.timestamp > recent_cutoff).group_by(Alert.severity).all()
             
-            return {
+            summary = {
                 'total_recent_alerts': recent_alerts,
                 'unresolved_alerts': unresolved_alerts,
                 'alerts_by_type': dict(type_counts),
                 'alerts_by_severity': dict(severity_counts),
                 'last_updated': current_time.isoformat()
             }
+            
+            # Cache the result
+            self.cache.set(CachePrefixes.ALERT_SUMMARY, cache_key, summary, CacheTTL.SHORT)
+            
+            return summary
             
         except Exception as e:
             logger.error(f"Error getting alert summary: {e}")

@@ -7,10 +7,13 @@ import logging
 import threading
 import signal
 import sys
+import json
+import os
 from datetime import datetime
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from config import config
+from flask_socketio import SocketIO, emit, join_room, leave_room
+from config import config, DevelopmentConfig
 from models.db_models import init_db
 from services.packet_sniffer import PacketSniffer
 from services.analyzer import PacketAnalyzer
@@ -22,7 +25,7 @@ from routes.insider import insider_bp, init_logger as init_insider_logger
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, DevelopmentConfig.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -51,6 +54,9 @@ def create_app(config_name='default'):
     # Enable CORS for Next.js frontend
     CORS(app, origins=['http://localhost:3000', 'http://127.0.0.1:3000'])
     
+    # Initialize SocketIO for real-time communication
+    socketio = SocketIO(app, cors_allowed_origins=['http://localhost:3000', 'http://127.0.0.1:3000'])
+    
     # Initialize database
     init_db(app)
     
@@ -77,6 +83,34 @@ def create_app(config_name='default'):
     app.analyzer = analyzer
     app.logger_service = logger_service
     app.packet_sniffer = packet_sniffer
+    app.socketio = socketio
+    
+    # WebSocket event handlers
+    @socketio.on('connect')
+    def handle_connect():
+        logger.info(f"Client connected: {request.sid}")
+        emit('connected', {'message': 'Connected to IDS backend'})
+    
+    @socketio.on('disconnect')
+    def handle_disconnect():
+        logger.info(f"Client disconnected: {request.sid}")
+    
+    @socketio.on('join_room')
+    def handle_join_room(data):
+        room = data.get('room', 'dashboard')
+        join_room(room)
+        logger.info(f"Client {request.sid} joined room: {room}")
+        emit('joined_room', {'room': room})
+    
+    @socketio.on('leave_room')
+    def handle_leave_room(data):
+        room = data.get('room', 'dashboard')
+        leave_room(room)
+        logger.info(f"Client {request.sid} left room: {room}")
+        emit('left_room', {'room': room})
+    
+    # Store socketio instance globally for broadcasting
+    app._socketio = socketio
     
     # Error handlers
     @app.errorhandler(404)
@@ -217,12 +251,27 @@ def create_app(config_name='default'):
                     # Analyze packet
                     detections = app.analyzer.analyze_packet(packet_data)
                     
-                    # Log detections
+                    # Log detections and broadcast alerts
                     for detection in detections:
-                        app.logger_service.log_alert(detection, packet_data)
+                        alert = app.logger_service.log_alert(detection, packet_data)
+                        if alert:
+                            # Broadcast new alert to all connected clients
+                            with app.app_context():
+                                app._socketio.emit('new_alert', {
+                                    'type': 'alert',
+                                    'data': alert.to_dict()
+                                }, room='dashboard')
                     
                     # Log traffic statistics
                     app.logger_service.log_traffic_stats(packet_data)
+                    
+                    # Broadcast traffic update every 10 packets
+                    if app.packet_sniffer.stats['total_packets'] % 10 == 0:
+                        with app.app_context():
+                            app._socketio.emit('traffic_update', {
+                                'type': 'traffic_stats',
+                                'data': app.packet_sniffer.get_stats()
+                            }, room='dashboard')
                     
             except Exception as e:
                 logger.error(f"Error in packet processing: {e}")
@@ -232,8 +281,18 @@ def create_app(config_name='default'):
         """Start all background services"""
         try:
             # Start packet sniffer
+            logger.info("Starting packet capture service...")
             app.packet_sniffer.start_capture()
-            logger.info("Packet sniffer started")
+            
+            # Check if packet sniffer is actually running
+            if app.packet_sniffer.running:
+                logger.info("Packet sniffer started successfully!")
+                logger.info("Real-time packet capture is now active")
+            else:
+                logger.warning("Packet sniffer failed to start")
+                logger.info("This usually means insufficient privileges")
+                logger.info("Run as Administrator or use start_backend_admin.ps1")
+                logger.info("The system will continue in analysis-only mode")
             
             # Start packet processing thread
             processing_thread = threading.Thread(
@@ -246,7 +305,8 @@ def create_app(config_name='default'):
             
         except Exception as e:
             logger.error(f"Error starting services: {e}")
-            logger.error("Services will run in degraded mode (manual analysis only)")
+            logger.info("Services will run in degraded mode (manual analysis only)")
+            logger.info("Try running with Administrator privileges for full functionality")
     
     # Signal handlers for graceful shutdown
     def signal_handler(signum, frame):
@@ -268,13 +328,7 @@ def create_app(config_name='default'):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Start services after app context
-    @app.before_first_request
-    def initialize_services():
-        """Initialize services after first request"""
-        start_services()
-    
-    # Alternative startup for newer Flask versions
+    # Start services immediately
     with app.app_context():
         try:
             start_services()
@@ -293,7 +347,7 @@ def main():
     
     # Run application
     host = os.environ.get('FLASK_HOST', '0.0.0.0')
-    port = int(os.environ.get('FLASK_PORT', 5000))
+    port = int(os.environ.get('FLASK_PORT', 3002))
     debug = config_name == 'development'
     
     logger.info(f"Starting Flask IDS Backend on {host}:{port}")
@@ -301,7 +355,8 @@ def main():
     logger.info(f"Debug mode: {debug}")
     
     try:
-        app.run(host=host, port=port, debug=debug, threaded=True)
+        # Run with SocketIO instead of regular Flask
+        app.socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt, shutting down...")
     except Exception as e:

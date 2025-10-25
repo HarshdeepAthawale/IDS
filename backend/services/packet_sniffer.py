@@ -34,8 +34,8 @@ class PacketSniffer:
         self.packet_queue = queue.Queue(maxsize=10000)
         self.running = False
         self.capture_thread = None
-        self.interface = config.CAPTURE_INTERFACE
-        self.timeout = config.CAPTURE_TIMEOUT
+        self.interface = getattr(config, 'CAPTURE_INTERFACE', 'any')
+        self.timeout = getattr(config, 'CAPTURE_TIMEOUT', 1)
         
         # Statistics
         self.stats = {
@@ -344,28 +344,106 @@ class PacketSniffer:
             # Check if we have permission to capture
             if not self._check_capture_permissions():
                 logger.error("Insufficient permissions for packet capture. Run with elevated privileges.")
+                logger.info("SOLUTION: Run PowerShell as Administrator and execute:")
+                logger.info("  .\\start_backend_admin.ps1")
+                logger.info("  OR")
+                logger.info("  .\\START_BACKEND.bat")
                 return
+            
+            # Auto-detect interface if 'any' is specified
+            if self.interface == 'any':
+                self.interface = self._get_best_interface()
+                logger.info(f"Auto-selected interface: {self.interface}")
             
             logger.info(f"Starting packet capture on interface: {self.interface}")
             
-            # Start Scapy sniff
+            # Start Scapy sniff with Windows-specific handling
             sniff(
                 iface=self.interface,
                 prn=self._packet_handler,
                 store=0,  # Don't store packets in memory
-                timeout=self.timeout
+                timeout=self.timeout,
+                stop_filter=lambda x: not self.running  # Stop when running becomes False
             )
             
         except Exception as e:
             logger.error(f"Error in capture loop: {e}")
-            if "Permission denied" in str(e) or "Operation not permitted" in str(e):
-                logger.error("Packet capture requires elevated privileges (run as root/administrator)")
+            if "Permission denied" in str(e) or "Operation not permitted" in str(e) or "WinError 10013" in str(e):
+                logger.error("Packet capture requires elevated privileges (run as Administrator)")
+                logger.info("SOLUTION: Run PowerShell as Administrator and execute:")
+                logger.info("  .\\start_backend_admin.ps1")
+                logger.info("  OR")
+                logger.info("  .\\START_BACKEND.bat")
+            elif "No such device" in str(e) or "Interface not found" in str(e):
+                logger.error(f"Interface '{self.interface}' not found")
+                logger.info("Available interfaces:")
+                try:
+                    from scapy.all import get_if_list
+                    for iface in get_if_list():
+                        logger.info(f"  - {iface}")
+                except:
+                    pass
             else:
                 logger.error(f"Capture error: {e}")
         finally:
             self.running = False
     
+    def _get_best_interface(self) -> str:
+        """
+        Auto-detect the best network interface for packet capture
+        
+        Returns:
+            Best interface name for packet capture
+        """
+        try:
+            from scapy.all import get_if_list, get_if_addr
+            
+            interfaces = get_if_list()
+            logger.info(f"Available interfaces: {interfaces}")
+            
+            # Prefer non-loopback interfaces
+            for iface in interfaces:
+                if 'Loopback' not in iface and 'lo' not in iface.lower():
+                    try:
+                        addr = get_if_addr(iface)
+                        if addr and addr != '127.0.0.1':
+                            logger.info(f"Selected interface: {iface} (IP: {addr})")
+                            return iface
+                    except:
+                        continue
+            
+            # Fallback to first available interface
+            if interfaces:
+                logger.info(f"Using fallback interface: {interfaces[0]}")
+                return interfaces[0]
+            
+            # Last resort
+            return 'any'
+            
+        except Exception as e:
+            logger.warning(f"Error detecting interface: {e}")
+            return 'any'
+    
     def _check_capture_permissions(self) -> bool:
+        """
+        Check if we have sufficient permissions for packet capture
+        """
+        try:
+            # Try to create a test socket to check permissions
+            import socket
+            test_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+            test_socket.close()
+            return True
+        except PermissionError:
+            logger.warning("Insufficient permissions for packet capture")
+            logger.info("TIP: Run the application as Administrator to enable packet capture")
+            logger.info("   Or use the start_backend_admin.ps1 script for automatic admin privileges")
+            return False
+        except Exception as e:
+            logger.warning(f"Permission check failed: {e}")
+            return False
+    
+    def _check_capture_permissions_old(self) -> bool:
         """
         Check if we have sufficient permissions for packet capture
         

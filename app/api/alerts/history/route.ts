@@ -1,4 +1,4 @@
-// API route for alerts - proxy to Flask backend
+// API route for alert history - proxy to Flask backend
 
 import { flaskApi, transformers } from "@/lib/flask-api"
 
@@ -9,7 +9,7 @@ export async function GET(request: Request) {
     const params = Object.fromEntries(searchParams.entries())
     
     // Fetch from Flask backend
-    const flaskResponse = await flaskApi.getAlerts(params)
+    const flaskResponse = await flaskApi.getAlertHistory(params)
     
     // Transform Flask response to frontend format
     const alerts = flaskResponse.alerts.map(transformers.alertToFrontend)
@@ -20,7 +20,7 @@ export async function GET(request: Request) {
       summary: flaskResponse.summary
     })
   } catch (error) {
-    console.error("Error fetching alerts:", error)
-    return Response.json({ error: "Failed to fetch alerts" }, { status: 500 })
+    console.error("Error fetching alert history:", error)
+    return Response.json({ error: "Failed to fetch alert history" }, { status: 500 })
   }
 }

@@ -6,8 +6,12 @@ Supports both local development and AWS deployment
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file (if it exists)
+try:
+    load_dotenv()
+except Exception as e:
+    print(f"Warning: Could not load .env file: {e}")
+    print("Using default configuration values...")
 
 class Config:
     """Base configuration class"""
@@ -18,6 +22,7 @@ class Config:
     
     # Database configuration
     DATABASE_URL = os.environ.get('DATABASE_URL') or 'sqlite:///ids.db'
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///ids.db'
     
     # Detection thresholds
     PACKET_RATE_THRESHOLD = int(os.environ.get('PACKET_RATE_THRESHOLD', '1000'))
@@ -25,7 +30,7 @@ class Config:
     ANOMALY_SCORE_THRESHOLD = float(os.environ.get('ANOMALY_SCORE_THRESHOLD', '0.5'))
     
     # Packet capture settings
-    CAPTURE_INTERFACE = os.environ.get('CAPTURE_INTERFACE', 'any')
+    CAPTURE_INTERFACE = os.environ.get('CAPTURE_INTERFACE', 'any')  # Use 'any' for automatic interface detection
     CAPTURE_TIMEOUT = int(os.environ.get('CAPTURE_TIMEOUT', '1'))
     
     # Alert settings
@@ -54,22 +59,27 @@ class DevelopmentConfig(Config):
     """Development configuration"""
     DEBUG = True
     DATABASE_URL = os.environ.get('DEV_DATABASE_URL') or 'sqlite:///ids_dev.db'
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DEV_DATABASE_URL') or 'sqlite:///ids_dev.db'
 
 class ProductionConfig(Config):
     """Production configuration for AWS deployment"""
     DEBUG = False
     
-    # Ensure we have required environment variables for production
-    if not os.environ.get('SECRET_KEY'):
-        raise ValueError("SECRET_KEY environment variable must be set in production")
-    
-    if not os.environ.get('DATABASE_URL'):
-        raise ValueError("DATABASE_URL environment variable must be set in production")
+    @staticmethod
+    def init_app(app):
+        """Initialize app-specific configurations"""
+        # Ensure we have required environment variables for production
+        if not os.environ.get('SECRET_KEY'):
+            raise ValueError("SECRET_KEY environment variable must be set in production")
+        
+        if not os.environ.get('DATABASE_URL'):
+            raise ValueError("DATABASE_URL environment variable must be set in production")
 
 class TestingConfig(Config):
     """Testing configuration"""
     TESTING = True
     DATABASE_URL = 'sqlite:///:memory:'
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     WTF_CSRF_ENABLED = False
 
 # Configuration dictionary

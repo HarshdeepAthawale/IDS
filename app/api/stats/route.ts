@@ -1,15 +1,15 @@
-// API route for dashboard statistics
+// API route for dashboard statistics - proxy to Flask backend
+
+import { flaskApi, transformers } from "@/lib/flask-api"
 
 export async function GET() {
   try {
-    // In a real application, this would fetch from your backend/database
-    const stats = {
-      totalAlerts: 1247,
-      criticalAlerts: 23,
-      activeConnections: 156,
-      totalPackets: 2847392,
-    }
-
+    // Fetch from Flask backend
+    const flaskResponse = await flaskApi.getTrafficStats({ hours: 24 })
+    
+    // Transform Flask response to frontend format
+    const stats = transformers.trafficToDashboardStats(flaskResponse)
+    
     return Response.json(stats)
   } catch (error) {
     console.error("Error fetching stats:", error)

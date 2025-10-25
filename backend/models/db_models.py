@@ -41,6 +41,12 @@ class Alert(db.Model):
         Index('idx_alert_source_timestamp', 'source_ip', 'timestamp'),
         Index('idx_alert_type_severity', 'type', 'severity'),
         Index('idx_alert_unresolved', 'resolved', 'timestamp'),
+        Index('idx_alert_timestamp_desc', 'timestamp', postgresql_using='btree'),
+        Index('idx_alert_source_ip', 'source_ip'),
+        Index('idx_alert_dest_ip', 'dest_ip'),
+        Index('idx_alert_protocol', 'protocol'),
+        Index('idx_alert_severity_timestamp', 'severity', 'timestamp'),
+        Index('idx_alert_resolved_timestamp', 'resolved', 'timestamp'),
     )
     
     def to_dict(self):
@@ -93,6 +99,14 @@ class TrafficStat(db.Model):
     # Network health metrics
     avg_packet_size = db.Column(db.Float, nullable=True)
     connection_success_rate = db.Column(db.Float, nullable=True)
+    
+    # Indexes for performance
+    __table_args__ = (
+        Index('idx_traffic_timestamp_desc', 'timestamp', postgresql_using='btree'),
+        Index('idx_traffic_timestamp_range', 'timestamp'),
+        Index('idx_traffic_packet_rate', 'packet_rate'),
+        Index('idx_traffic_anomaly_count', 'anomaly_count'),
+    )
     
     def to_dict(self):
         """Convert model to dictionary for JSON serialization"""
@@ -147,6 +161,11 @@ class UserActivity(db.Model):
         Index('idx_user_activity_user_timestamp', 'user_id', 'timestamp'),
         Index('idx_user_activity_type_severity', 'activity_type', 'severity'),
         Index('idx_user_activity_source_ip', 'source_ip'),
+        Index('idx_user_activity_timestamp_desc', 'timestamp', postgresql_using='btree'),
+        Index('idx_user_activity_user_id', 'user_id'),
+        Index('idx_user_activity_username', 'username'),
+        Index('idx_user_activity_severity_timestamp', 'severity', 'timestamp'),
+        Index('idx_user_activity_type_timestamp', 'activity_type', 'timestamp'),
     )
     
     def to_dict(self):
