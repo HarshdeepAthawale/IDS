@@ -1,8 +1,0 @@
-pymongo>=4.6.1
-pandas>=2.2.0,<3.0.0
-numpy>=1.26.0
-scikit-learn>=1.4.0
-tqdm>=4.66.1
-matplotlib>=3.8.2
-seaborn>=0.13.0
-imbalanced-learn>=0.11.0
