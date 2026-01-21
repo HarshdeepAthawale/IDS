@@ -2,6 +2,7 @@
 
 import { Menu } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import RealtimeClock from "@/components/realtime-clock"
 
 interface HeaderProps {
   onMenuClick: () => void
@@ -17,7 +18,7 @@ export default function Header({ onMenuClick }: HeaderProps) {
         <h1 className="text-xl font-semibold text-foreground">IDS Dashboard</h1>
       </div>
       <div className="flex items-center gap-4">
-        <div className="text-sm text-muted-foreground">{new Date().toLocaleTimeString()}</div>
+        <RealtimeClock showSeconds={true} showDate={false} />
       </div>
     </header>
   )

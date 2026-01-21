@@ -20,10 +20,19 @@ interface Alert {
   sourceIp: string
   destIp: string
   protocol: string
-  type: "signature" | "anomaly"
+  type: "signature" | "anomaly" | "classification"
   severity: "critical" | "high" | "medium" | "low"
   description: string
   resolved?: boolean
+  confidenceScore?: number
+  classificationResult?: {
+    label: string
+    confidence: number
+    probabilities?: {
+      benign: number
+      malicious: number
+    }
+  }
 }
 
 export default function AlertsPage() {
@@ -85,7 +94,9 @@ export default function AlertsPage() {
         type: alert.type,
         severity: alert.severity,
         description: alert.description,
-        resolved: alert.resolved || false
+        resolved: alert.resolved || false,
+        confidenceScore: alert.confidence_score,
+        classificationResult: alert.classification_result
       }))
       
       setAlerts(transformedAlerts)
@@ -190,11 +201,13 @@ export default function AlertsPage() {
     
     setUpdatingAlerts(prev => new Set([...prev, ...selectedAlerts]))
     try {
-      // Delete alerts one by one (bulk delete not implemented in backend)
-      const deletePromises = Array.from(selectedAlerts).map(id => 
-        flaskApi.deleteAlert(parseInt(id))
-      )
-      await Promise.all(deletePromises)
+      // Use bulk delete endpoint
+      const alertIds = Array.from(selectedAlerts)
+      const result = await flaskApi.bulkDeleteAlerts({ alert_ids: alertIds })
+      
+      if (result.failed_count > 0) {
+        console.warn(`Failed to delete ${result.failed_count} alerts:`, result.failed_alerts)
+      }
       
       // Remove from local state
       setAlerts(prev => prev.filter(alert => !selectedAlerts.has(alert.id)))
@@ -369,6 +382,7 @@ export default function AlertsPage() {
                   <SelectItem value="all">All Types</SelectItem>
                   <SelectItem value="signature">Signature</SelectItem>
                   <SelectItem value="anomaly">Anomaly</SelectItem>
+                  <SelectItem value="classification">Classification</SelectItem>
                 </SelectContent>
               </Select>
 
@@ -485,6 +499,28 @@ export default function AlertsPage() {
                         )}
                       </div>
                       <p className="text-sm font-medium text-foreground">{alert.description}</p>
+                      {alert.classificationResult && (
+                        <div className="mt-2 p-2 rounded bg-blue-500/10 border border-blue-500/20">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="font-semibold text-blue-500">ML Classification:</span>
+                            <span className="text-foreground">{alert.classificationResult.label}</span>
+                            <span className="text-muted-foreground">
+                              (Confidence: {(alert.classificationResult.confidence * 100).toFixed(1)}%)
+                            </span>
+                            {alert.classificationResult.probabilities && (
+                              <span className="text-muted-foreground">
+                                | Benign: {(alert.classificationResult.probabilities.benign * 100).toFixed(1)}% 
+                                | Malicious: {(alert.classificationResult.probabilities.malicious * 100).toFixed(1)}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {alert.confidenceScore && !alert.classificationResult && (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Confidence: {(alert.confidenceScore * 100).toFixed(1)}%
+                        </div>
+                      )}
                       <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
                         <span>From: {alert.sourceIp}</span>
                         <span>To: {alert.destIp}</span>

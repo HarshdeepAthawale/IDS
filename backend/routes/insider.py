@@ -6,9 +6,8 @@ Provides endpoints for monitoring suspicious user activities
 import logging
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
-from models.db_models import UserActivity, db
+from models.db_models import user_activities_collection, user_activity_to_dict
 from services.logger import DatabaseLogger
-from sqlalchemy import func, desc, and_
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +129,7 @@ def get_insider_threats():
         risk_assessment = _assess_insider_risk(activities)
         
         # Convert activities to dictionaries
-        activities_data = [activity.to_dict() for activity in activities]
+        activities_data = [user_activity_to_dict(activity) for activity in activities]
         
         response = {
             'activities': activities_data,
@@ -214,11 +213,11 @@ def get_user_activities(user_id):
         behavior_analysis = _analyze_user_behavior(activities)
         
         # Convert activities to dictionaries
-        activities_data = [activity.to_dict() for activity in activities]
+        activities_data = [user_activity_to_dict(activity) for activity in activities]
         
         response = {
             'user_id': user_id,
-            'username': activities[0].username if activities else 'unknown',
+            'username': activities[0].get('username', 'unknown') if activities else 'unknown',
             'activities': activities_data,
             'total_activities': len(activities_data),
             'user_profile': user_profile,
@@ -313,20 +312,20 @@ def get_insider_summary():
         
         for activity in activities:
             # Activity type distribution
-            activity_type = activity.activity_type
+            activity_type = activity.get('activity_type')
             activity_distribution[activity_type] = activity_distribution.get(activity_type, 0) + 1
             
             # Severity distribution
-            severity = activity.severity
+            severity = activity.get('severity')
             severity_distribution[severity] = severity_distribution.get(severity, 0) + 1
             
             # User activity counts
-            user_id = activity.user_id
+            user_id = activity.get('user_id')
             if user_id not in user_activity_counts:
                 user_activity_counts[user_id] = {
                     'count': 0,
                     'highest_severity': 'low',
-                    'username': activity.username
+                    'username': activity.get('username', 'unknown')
                 }
             user_activity_counts[user_id]['count'] += 1
             
@@ -466,7 +465,7 @@ def log_user_activity():
         logger.info(f"Logged user activity: {data['user_id']} - {data['activity_type']} - {data['severity']}")
         
         return jsonify({
-            'activity': activity.to_dict(),
+            'activity': user_activity_to_dict(activity),
             'message': 'User activity logged successfully'
         })
         
@@ -486,27 +485,29 @@ def _calculate_insider_summary(activities, start_date, end_date):
         }
     
     total_activities = len(activities)
-    high_severity_count = sum(1 for a in activities if a.severity == 'high')
-    critical_severity_count = sum(1 for a in activities if a.severity == 'critical')
+    high_severity_count = sum(1 for a in activities if a.get('severity') == 'high')
+    critical_severity_count = sum(1 for a in activities if a.get('severity') == 'critical')
     
     # Most common activity
     activity_counts = {}
     for activity in activities:
-        activity_counts[activity.activity_type] = activity_counts.get(activity.activity_type, 0) + 1
+        activity_type = activity.get('activity_type')
+        activity_counts[activity_type] = activity_counts.get(activity_type, 0) + 1
     most_common_activity = max(activity_counts.items(), key=lambda x: x[1])[0] if activity_counts else None
     
     # Top suspicious users
     user_counts = {}
     for activity in activities:
-        user_id = activity.user_id
+        user_id = activity.get('user_id')
         if user_id not in user_counts:
             user_counts[user_id] = {'count': 0, 'severity': 'low'}
         user_counts[user_id]['count'] += 1
         
         # Update highest severity
         severity_order = {'low': 1, 'medium': 2, 'high': 3, 'critical': 4}
-        if severity_order.get(activity.severity, 0) > severity_order.get(user_counts[user_id]['severity'], 0):
-            user_counts[user_id]['severity'] = activity.severity
+        activity_severity = activity.get('severity', 'low')
+        if severity_order.get(activity_severity, 0) > severity_order.get(user_counts[user_id]['severity'], 0):
+            user_counts[user_id]['severity'] = activity_severity
     
     top_suspicious_users = [
         {
@@ -538,25 +539,25 @@ def _assess_insider_risk(activities):
     risk_score = 0.0
     
     # Count high-risk activities
-    high_severity_count = sum(1 for a in activities if a.severity in ['high', 'critical'])
+    high_severity_count = sum(1 for a in activities if a.get('severity') in ['high', 'critical'])
     if high_severity_count > 0:
         risk_score += high_severity_count * 0.3
         risk_factors.append(f"{high_severity_count} high/critical severity activities")
     
     # Check for data exfiltration
-    exfiltration_count = sum(1 for a in activities if a.activity_type == 'data_exfiltration')
+    exfiltration_count = sum(1 for a in activities if a.get('activity_type') == 'data_exfiltration')
     if exfiltration_count > 0:
         risk_score += exfiltration_count * 0.4
         risk_factors.append(f"{exfiltration_count} data exfiltration attempts")
     
     # Check for off-hours access
-    off_hours_count = sum(1 for a in activities if a.activity_type == 'off_hours_access')
+    off_hours_count = sum(1 for a in activities if a.get('activity_type') == 'off_hours_access')
     if off_hours_count > 2:
         risk_score += (off_hours_count - 2) * 0.1
         risk_factors.append(f"{off_hours_count} off-hours access attempts")
     
     # Check for privilege escalation
-    privilege_count = sum(1 for a in activities if a.activity_type == 'privilege_escalation')
+    privilege_count = sum(1 for a in activities if a.get('activity_type') == 'privilege_escalation')
     if privilege_count > 0:
         risk_score += privilege_count * 0.5
         risk_factors.append(f"{privilege_count} privilege escalation attempts")
@@ -587,16 +588,25 @@ def _get_user_profile(user_id, activities):
             'risk_score': 0.0
         }
     
-    timestamps = [a.timestamp for a in activities]
+    timestamps = [a.get('timestamp') for a in activities if a.get('timestamp')]
+    if not timestamps:
+        return {
+            'first_activity': None,
+            'last_activity': None,
+            'total_sessions': 0,
+            'risk_score': 0.0
+        }
+    
     first_activity = min(timestamps)
     last_activity = max(timestamps)
     
     # Count unique sessions
-    sessions = set(a.session_id for a in activities if a.session_id)
+    sessions = set(a.get('session_id') for a in activities if a.get('session_id'))
     total_sessions = len(sessions)
     
     # Calculate risk score
-    risk_score = _calculate_user_risk_score(len(activities), activities[0].severity)
+    first_severity = activities[0].get('severity', 'low') if activities else 'low'
+    risk_score = _calculate_user_risk_score(len(activities), first_severity)
     
     return {
         'first_activity': first_activity.isoformat(),
@@ -615,7 +625,12 @@ def _analyze_user_behavior(activities):
         }
     
     # Analyze activity hours
-    hours = [a.timestamp.hour for a in activities]
+    hours = []
+    for a in activities:
+        timestamp = a.get('timestamp')
+        if timestamp and isinstance(timestamp, datetime):
+            hours.append(timestamp.hour)
+    
     if hours:
         usual_start = min(hours)
         usual_end = max(hours)
@@ -624,10 +639,15 @@ def _analyze_user_behavior(activities):
         usual_hours = None
     
     # Count unusual access (outside 9-17)
-    unusual_access_count = sum(1 for a in activities if a.timestamp.hour < 9 or a.timestamp.hour > 17)
+    unusual_access_count = 0
+    for a in activities:
+        timestamp = a.get('timestamp')
+        if timestamp and isinstance(timestamp, datetime):
+            if timestamp.hour < 9 or timestamp.hour > 17:
+                unusual_access_count += 1
     
     # Count high-risk activities
-    high_risk_activities = sum(1 for a in activities if a.severity in ['high', 'critical'])
+    high_risk_activities = sum(1 for a in activities if a.get('severity') in ['high', 'critical'])
     
     return {
         'usual_hours': usual_hours,

@@ -5,10 +5,9 @@ Provides endpoints for retrieving traffic metrics and protocol statistics
 
 import logging
 from datetime import datetime, timedelta
-from flask import Blueprint, request, jsonify
-from models.db_models import TrafficStat, db
+from flask import Blueprint, request, jsonify, current_app
+from models.db_models import traffic_stats_collection, traffic_stat_to_dict
 from services.logger import DatabaseLogger
-from sqlalchemy import func, desc
 
 logger = logging.getLogger(__name__)
 
@@ -83,25 +82,27 @@ def get_traffic_stats():
         limit = min(int(request.args.get('limit', 24)), 168)  # Max 168 data points
         
         # Get current traffic stats (most recent)
-        current_stats = TrafficStat.query.order_by(desc(TrafficStat.timestamp)).first()
+        current_stats = traffic_stats_collection.find_one(
+            sort=[('timestamp', -1)]
+        )
         
         # Get historical data
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
-        historical_data = TrafficStat.query.filter(
-            TrafficStat.timestamp >= cutoff_time
-        ).order_by(desc(TrafficStat.timestamp)).limit(limit).all()
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+        historical_data = list(traffic_stats_collection.find(
+            {'timestamp': {'$gte': cutoff_time}}
+        ).sort('timestamp', -1).limit(limit))
         
         # Calculate summary statistics
         summary = _calculate_traffic_summary(historical_data)
         
         response = {
-            'current_stats': current_stats.to_dict() if current_stats else None,
-            'historical_data': [stat.to_dict() for stat in historical_data],
+            'current_stats': traffic_stat_to_dict(current_stats) if current_stats else None,
+            'historical_data': [traffic_stat_to_dict(stat) for stat in historical_data],
             'summary': summary,
             'time_range': {
                 'hours': hours,
                 'start_time': cutoff_time.isoformat(),
-                'end_time': datetime.utcnow().isoformat()
+                'end_time': datetime.now().isoformat()
             }
         }
         
@@ -160,26 +161,53 @@ def get_protocol_stats():
         limit = min(int(request.args.get('limit', 10)), 50)
         
         # Get protocol statistics from recent traffic data
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
-        traffic_stats = TrafficStat.query.filter(
-            TrafficStat.timestamp >= cutoff_time
-        ).all()
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+        traffic_stats = list(traffic_stats_collection.find(
+            {'timestamp': {'$gte': cutoff_time}}
+        ))
         
         # Aggregate protocol data
         protocol_data = {}
         total_packets = 0
         
         for stat in traffic_stats:
-            protocol_dist = stat.protocol_distribution or {}
+            protocol_dist = stat.get('protocol_distribution', {}) if isinstance(stat, dict) else (stat.protocol_distribution if hasattr(stat, 'protocol_distribution') else {}) or {}
+            
+            # Skip if protocol_distribution is empty or not a dict
+            if not isinstance(protocol_dist, dict) or not protocol_dist:
+                continue
+            
+            # Get average packet size from this traffic_stats document to estimate bytes per protocol
+            stat_avg_packet_size = stat.get('avg_packet_size', 0)
+            if not stat_avg_packet_size or stat_avg_packet_size == 0:
+                # Calculate from total_bytes and total_packets if avg_packet_size not available
+                stat_total_bytes = stat.get('total_bytes', 0)
+                stat_total_packets = stat.get('total_packets', 1)
+                stat_avg_packet_size = stat_total_bytes / stat_total_packets if stat_total_packets > 0 else 0
+            
             for protocol, count in protocol_dist.items():
+                # Handle non-numeric count values
+                if not isinstance(count, (int, float)):
+                    try:
+                        count = int(count)
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid protocol count for {protocol}: {count}")
+                        continue
+                
                 if protocol not in protocol_data:
                     protocol_data[protocol] = {
                         'total_packets': 0,
                         'total_bytes': 0,
                         'count': 0
                     }
+                
                 protocol_data[protocol]['total_packets'] += count
                 protocol_data[protocol]['count'] += 1
+                
+                # Estimate bytes per protocol using overall avg_packet_size from the document
+                estimated_bytes = count * stat_avg_packet_size
+                protocol_data[protocol]['total_bytes'] += estimated_bytes
+                
                 total_packets += count
         
         # Calculate percentages and averages
@@ -281,10 +309,10 @@ def get_connection_stats():
         limit = min(int(request.args.get('limit', 20)), 100)
         
         # Get connection data from recent traffic stats
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
-        traffic_stats = TrafficStat.query.filter(
-            TrafficStat.timestamp >= cutoff_time
-        ).order_by(desc(TrafficStat.timestamp)).all()
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+        traffic_stats = list(traffic_stats_collection.find(
+            {'timestamp': {'$gte': cutoff_time}}
+        ).sort('timestamp', -1))
         
         # Aggregate connection data
         source_ips = {}
@@ -294,9 +322,15 @@ def get_connection_stats():
         
         for stat in traffic_stats:
             total_connections += stat.active_connections
+            timestamp = stat.get('timestamp')
+            if isinstance(timestamp, datetime):
+                timestamp_str = timestamp.isoformat()
+            else:
+                timestamp_str = str(timestamp)
+            
             connection_trend.append({
-                'timestamp': stat.timestamp.isoformat(),
-                'active_connections': stat.active_connections
+                'timestamp': timestamp_str,
+                'active_connections': stat.get('active_connections', 0)
             })
             
             # Aggregate source IPs
@@ -323,8 +357,8 @@ def get_connection_stats():
         
         # Calculate statistics
         avg_connections = total_connections / len(traffic_stats) if traffic_stats else 0
-        peak_connections = max((stat.active_connections for stat in traffic_stats), default=0)
-        current_connections = traffic_stats[0].active_connections if traffic_stats else 0
+        peak_connections = max((stat.get('active_connections', 0) for stat in traffic_stats), default=0)
+        current_connections = traffic_stats[0].get('active_connections', 0) if traffic_stats else 0
         
         # Top source IPs
         top_source_ips = []
@@ -407,9 +441,9 @@ def get_anomaly_stats():
         
         # Get anomaly data from traffic stats
         cutoff_time = datetime.utcnow() - timedelta(hours=hours)
-        traffic_stats = TrafficStat.query.filter(
-            TrafficStat.timestamp >= cutoff_time
-        ).order_by(desc(TrafficStat.timestamp)).all()
+        traffic_stats = list(traffic_stats_collection.find(
+            {'timestamp': {'$gte': cutoff_time}}
+        ).sort('timestamp', -1))
         
         # Calculate anomaly statistics
         total_anomalies = sum(stat.anomaly_count for stat in traffic_stats)
@@ -418,13 +452,18 @@ def get_anomaly_stats():
         current_anomaly_rate = traffic_stats[0].anomaly_count if traffic_stats else 0
         
         # Anomaly trend
-        anomaly_trend = [
-            {
-                'timestamp': stat.timestamp.isoformat(),
-                'anomaly_count': stat.anomaly_count
-            }
-            for stat in traffic_stats
-        ]
+        anomaly_trend = []
+        for stat in traffic_stats:
+            timestamp = stat.get('timestamp')
+            if isinstance(timestamp, datetime):
+                timestamp_str = timestamp.isoformat()
+            else:
+                timestamp_str = str(timestamp)
+            
+            anomaly_trend.append({
+                'timestamp': timestamp_str,
+                'anomaly_count': stat.get('anomaly_count', 0)
+            })
         
         response = {
             'anomaly_stats': {
@@ -437,7 +476,7 @@ def get_anomaly_stats():
             'time_range': {
                 'hours': hours,
                 'start_time': cutoff_time.isoformat(),
-                'end_time': datetime.utcnow().isoformat()
+                'end_time': datetime.now().isoformat()
             }
         }
         
@@ -447,12 +486,74 @@ def get_anomaly_stats():
         logger.error(f"Error getting anomaly stats: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
+@stats_bp.route('/api/stats/realtime', methods=['GET'])
+def get_realtime_stats():
+    """
+    Get real-time traffic statistics from in-memory cache
+    
+    Returns current stats that haven't been flushed to database yet.
+    This provides instant, real-time data without database query overhead.
+    
+    Returns:
+    JSON response with real-time traffic statistics
+    
+    Example Response:
+    {
+        "total_packets": 1250,
+        "total_bytes": 524288,
+        "active_connections": 5,
+        "protocol_distribution": {
+            "TCP": 850,
+            "UDP": 320,
+            "ICMP": 80
+        },
+        "top_source_ips": [
+            {"ip": "192.168.1.100", "count": 150}
+        ],
+        "top_dest_ports": [
+            {"port": "80", "count": 250}
+        ],
+        "packet_rate": 41.67,
+        "byte_rate": 17476.27,
+        "avg_packet_size": 419.43,
+        "timestamp": "2024-01-15T10:30:00Z",
+        "cache_age_seconds": 15.5
+    }
+    """
+    try:
+        if not logger_service:
+            return jsonify({'error': 'Logger service not initialized'}), 500
+        
+        realtime_stats = logger_service.get_realtime_stats()
+        
+        if not realtime_stats:
+            return jsonify({
+                'total_packets': 0,
+                'total_bytes': 0,
+                'active_connections': 0,
+                'protocol_distribution': {},
+                'top_source_ips': [],
+                'top_dest_ports': [],
+                'packet_rate': 0,
+                'byte_rate': 0,
+                'avg_packet_size': 0,
+                'timestamp': datetime.utcnow().isoformat(),
+                'cache_age_seconds': 0,
+                'message': 'No packet data captured yet. Waiting for network traffic...'
+            })
+        
+        return jsonify(realtime_stats)
+        
+    except Exception as e:
+        logger.error(f"Error getting real-time stats: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
 def _calculate_traffic_summary(traffic_stats):
     """
     Calculate summary statistics from traffic data
     
     Args:
-        traffic_stats: List of TrafficStat objects
+        traffic_stats: List of traffic stat documents
         
     Returns:
         Dictionary with summary statistics
@@ -461,18 +562,20 @@ def _calculate_traffic_summary(traffic_stats):
         return {}
     
     # Calculate averages
-    total_packets = sum(stat.total_packets for stat in traffic_stats)
-    total_connections = sum(stat.active_connections for stat in traffic_stats)
-    total_anomalies = sum(stat.anomaly_count for stat in traffic_stats)
+    total_packets = sum(stat.get('total_packets', 0) for stat in traffic_stats)
+    total_connections = sum(stat.get('active_connections', 0) for stat in traffic_stats)
+    total_anomalies = sum(stat.get('anomaly_count', 0) for stat in traffic_stats)
     
-    avg_packet_rate = sum(stat.packet_rate for stat in traffic_stats) / len(traffic_stats)
-    peak_packet_rate = max(stat.packet_rate for stat in traffic_stats)
+    packet_rates = [stat.get('packet_rate', 0) for stat in traffic_stats]
+    avg_packet_rate = sum(packet_rates) / len(packet_rates) if packet_rates else 0
+    peak_packet_rate = max(packet_rates) if packet_rates else 0
     
     # Find most active protocol
     protocol_counts = {}
     for stat in traffic_stats:
-        if stat.protocol_distribution:
-            for protocol, count in stat.protocol_distribution.items():
+        protocol_dist = stat.get('protocol_distribution', {})
+        if protocol_dist:
+            for protocol, count in protocol_dist.items():
                 protocol_counts[protocol] = protocol_counts.get(protocol, 0) + count
     
     most_active_protocol = max(protocol_counts.items(), key=lambda x: x[1])[0] if protocol_counts else None
@@ -484,3 +587,127 @@ def _calculate_traffic_summary(traffic_stats):
         'most_active_protocol': most_active_protocol,
         'avg_connections': round(total_connections / len(traffic_stats), 2) if traffic_stats else 0
     }
+
+@stats_bp.route('/api/stats/debug/active-connections', methods=['GET'])
+def get_active_connections_debug():
+    """
+    Debug endpoint to show detailed information about active connections
+    
+    Returns:
+    JSON response with detailed active connection information showing
+    source IP, destination IP, port, protocol, last seen time, and age
+    
+    Example Response:
+    {
+        "total_connections": 4,
+        "connections": [
+            {
+                "id": 1,
+                "source_ip": "192.168.1.100",
+                "destination_ip": "8.8.8.8",
+                "destination_port": 53,
+                "protocol": "DNS",
+                "last_seen": "2026-01-21T04:37:45.123456",
+                "age_seconds": 15.5,
+                "connection_string": "192.168.1.100 -> 8.8.8.8:53"
+            }
+        ],
+        "sniffer_status": {
+            "running": true,
+            "total_packets": 1250,
+            "interface": "any",
+            "packet_rate": 41.67,
+            "byte_rate": 17476.27
+        },
+        "timestamp": "2026-01-21T04:37:50.000000"
+    }
+    """
+    try:
+        # Get packet sniffer from app context
+        if not hasattr(current_app, 'packet_sniffer') or not current_app.packet_sniffer:
+            return jsonify({
+                'error': 'Packet sniffer not available',
+                'total_connections': 0,
+                'connections': [],
+                'sniffer_status': {'running': False}
+            }), 500
+        
+        packet_sniffer = current_app.packet_sniffer
+        
+        # Get connections dictionary: {(src_ip, dst_ip, dst_port): timestamp}
+        connections_dict = packet_sniffer.get_connections()
+        
+        # Get sniffer stats
+        sniffer_stats = packet_sniffer.get_stats()
+        
+        # Format connections
+        connections_list = []
+        current_time = datetime.utcnow()
+        
+        for idx, ((src_ip, dst_ip, dst_port), last_seen) in enumerate(connections_dict.items(), 1):
+            age_seconds = (current_time - last_seen).total_seconds()
+            
+            # Try to determine protocol from port
+            protocol = "Unknown"
+            if dst_port:
+                if dst_port in [80, 443]:
+                    protocol = "HTTP/HTTPS"
+                elif dst_port == 53:
+                    protocol = "DNS"
+                elif dst_port == 22:
+                    protocol = "SSH"
+                elif dst_port in [20, 21]:
+                    protocol = "FTP"
+                elif dst_port == 25:
+                    protocol = "SMTP"
+                elif dst_port == 3306:
+                    protocol = "MySQL"
+                elif dst_port == 5432:
+                    protocol = "PostgreSQL"
+                elif dst_port == 3389:
+                    protocol = "RDP"
+                elif dst_port == 1433:
+                    protocol = "MSSQL"
+                elif dst_port in [587, 465]:
+                    protocol = "SMTP (secure)"
+                else:
+                    protocol = f"Port {dst_port}"
+            
+            connections_list.append({
+                'id': idx,
+                'source_ip': src_ip if src_ip else 'Unknown',
+                'destination_ip': dst_ip if dst_ip else 'Unknown',
+                'destination_port': dst_port if dst_port else 'Unknown',
+                'protocol': protocol,
+                'last_seen': last_seen.isoformat() if isinstance(last_seen, datetime) else str(last_seen),
+                'age_seconds': round(age_seconds, 2),
+                'connection_string': f"{src_ip or 'Unknown'} -> {dst_ip or 'Unknown'}:{dst_port or 'Unknown'}"
+            })
+        
+        # Sort by last_seen (most recent first)
+        connections_list.sort(key=lambda x: x['last_seen'], reverse=True)
+        
+        response = {
+            'total_connections': len(connections_list),
+            'connections': connections_list,
+            'sniffer_status': {
+                'running': sniffer_stats.get('running', False),
+                'total_packets': sniffer_stats.get('total_packets', 0),
+                'interface': packet_sniffer.interface if hasattr(packet_sniffer, 'interface') else 'unknown',
+                'packet_rate': round(sniffer_stats.get('packet_rate', 0), 2),
+                'byte_rate': round(sniffer_stats.get('byte_rate', 0), 2)
+            },
+            'timestamp': current_time.isoformat()
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error getting active connections debug info: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'error': str(e),
+            'total_connections': 0,
+            'connections': []
+        }), 500

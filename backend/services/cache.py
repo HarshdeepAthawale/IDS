@@ -50,7 +50,8 @@ class CacheService:
             logger.info("Redis connection established")
             
         except Exception as e:
-            logger.warning(f"Redis not available, using memory cache: {e}")
+            # Redis is optional - silently fall back to memory cache
+            logger.debug(f"Redis not available, using memory cache: {e}")
             self.redis_client = None
     
     def _get_cache_key(self, prefix: str, key: str) -> str:

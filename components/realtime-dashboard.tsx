@@ -1,11 +1,12 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react"
+import { io, Socket } from "socket.io-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { AlertCircle, Activity, Wifi, WifiOff, RefreshCw, Bell, BellOff } from "lucide-react"
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts"
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from "recharts"
 import { config } from "@/lib/config"
 
 interface RealtimeData {
@@ -34,74 +35,11 @@ export default function RealtimeDashboard() {
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected" | "error">("disconnected")
   const [error, setError] = useState<string | null>(null)
   
-  const socketRef = useRef<WebSocket | null>(null)
+  const socketRef = useRef<Socket | null>(null)
+  const handleRealtimeDataRef = useRef<(data: any) => void>()
   const maxDataPoints = 50
 
-  const connectWebSocket = () => {
-    try {
-      setConnectionStatus("connecting")
-      setError(null)
-      
-      // Connect to Flask SocketIO server
-      const wsUrl = `ws://localhost:3002/socket.io/?EIO=4&transport=websocket`
-      socketRef.current = new WebSocket(wsUrl)
-      
-      socketRef.current.onopen = () => {
-        console.log('WebSocket connected')
-        setIsConnected(true)
-        setConnectionStatus("connected")
-        
-        // Send authentication if needed
-        socketRef.current?.send(JSON.stringify({
-          type: 'auth',
-          token: 'dashboard_token'
-        }))
-      }
-      
-      socketRef.current.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          handleRealtimeData(data)
-        } catch (err) {
-          console.error('Error parsing WebSocket message:', err)
-        }
-      }
-      
-      socketRef.current.onclose = () => {
-        console.log('WebSocket disconnected')
-        setIsConnected(false)
-        setConnectionStatus("disconnected")
-        
-        // Attempt to reconnect after 5 seconds
-        setTimeout(() => {
-          if (connectionStatus !== "connected") {
-            connectWebSocket()
-          }
-        }, 5000)
-      }
-      
-      socketRef.current.onerror = (error) => {
-        console.error('WebSocket error:', error)
-        setConnectionStatus("error")
-        setError("Failed to connect to real-time server")
-      }
-      
-    } catch (err) {
-      console.error('Error connecting WebSocket:', err)
-      setConnectionStatus("error")
-      setError("WebSocket connection failed")
-    }
-  }
-
-  const disconnectWebSocket = () => {
-    if (socketRef.current) {
-      socketRef.current.close()
-      socketRef.current = null
-    }
-    setIsConnected(false)
-    setConnectionStatus("disconnected")
-  }
-
+  // Store handleRealtimeData in ref to always have latest version
   const handleRealtimeData = useCallback((data: any) => {
     switch (data.type) {
       case 'traffic_update':
@@ -120,6 +58,7 @@ export default function RealtimeDashboard() {
         break
         
       case 'new_alert':
+        console.log('[Frontend] Processing new alert:', data)
         const newAlert: LiveAlert = {
           id: data.alert_id || Date.now().toString(),
           timestamp: new Date().toISOString(),
@@ -130,7 +69,12 @@ export default function RealtimeDashboard() {
           destIp: data.dest_ip || "Unknown"
         }
         
-        setLiveAlerts(prev => [newAlert, ...prev.slice(0, 9)]) // Keep last 10 alerts
+        console.log('[Frontend] Adding alert to state:', newAlert)
+        setLiveAlerts(prev => {
+          const updated = [newAlert, ...prev.slice(0, 9)] // Keep last 10 alerts
+          console.log('[Frontend] Updated liveAlerts count:', updated.length)
+          return updated
+        })
         
         // Show browser notification if enabled
         if (notificationsEnabled && 'Notification' in window) {
@@ -148,7 +92,114 @@ export default function RealtimeDashboard() {
       default:
         console.log('Unknown message type:', data.type)
     }
-  }, [notificationsEnabled])
+  }, [notificationsEnabled, maxDataPoints])
+
+  // Update ref whenever handleRealtimeData changes
+  useEffect(() => {
+    handleRealtimeDataRef.current = handleRealtimeData
+  }, [handleRealtimeData])
+
+  const connectWebSocket = useCallback(() => {
+    try {
+      // Clean up existing connection if any
+      if (socketRef.current) {
+        socketRef.current.removeAllListeners()
+        socketRef.current.disconnect()
+        socketRef.current = null
+      }
+
+      setConnectionStatus("connecting")
+      setError(null)
+      
+      // Use socket.io-client for Flask-SocketIO compatibility
+      const socket = io('http://localhost:3002', {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: 5
+      })
+      
+      socketRef.current = socket
+      
+      socket.on('connect', () => {
+        console.log('Socket.IO connected')
+        setIsConnected(true)
+        setConnectionStatus("connected")
+        
+        // Join dashboard room
+        socket.emit('join_room', { room: 'dashboard' })
+      })
+      
+      socket.on('connected', (data: any) => {
+        console.log('Server confirmed connection:', data)
+      })
+      
+      socket.on('new_alert', (data: any) => {
+        console.log('[WebSocket] new_alert event received:', data)
+        // Use ref to get latest version of handleRealtimeData
+        if (handleRealtimeDataRef.current) {
+          handleRealtimeDataRef.current({
+            type: 'new_alert',
+            alert_id: data.alert_id || data.id || Date.now().toString(),
+            severity: data.severity || 'medium',
+            alert_type: data.alert_type || data.type || 'Unknown',
+            description: data.description || 'New threat detected',
+            source_ip: data.source_ip || 'Unknown',
+            dest_ip: data.dest_ip || 'Unknown'
+          })
+        }
+      })
+      
+      socket.on('traffic_update', (data: any) => {
+        const packetsPerSecond = data.packets_per_second || data.packet_rate || 0
+        console.log('[WebSocket] traffic_update event received:', {
+          packets_per_second: packetsPerSecond,
+          threats_detected: data.threats_detected || 0,
+          active_connections: data.active_connections || 0,
+          total_packets: data.total_packets || 0,
+          timestamp: data.timestamp
+        })
+        // Use ref to get latest version of handleRealtimeData
+        if (handleRealtimeDataRef.current) {
+          handleRealtimeDataRef.current({
+            type: 'traffic_update',
+            packets_per_second: packetsPerSecond,
+            threats_detected: data.threats_detected || 0,
+            active_connections: data.active_connections || 0,
+            bandwidth_mbps: data.bandwidth_mbps || 0
+          })
+        }
+      })
+      
+      socket.on('disconnect', () => {
+        console.log('Socket.IO disconnected')
+        setIsConnected(false)
+        setConnectionStatus("disconnected")
+      })
+      
+      socket.on('connect_error', (error: Error) => {
+        console.error('Socket.IO connection error:', error)
+        setConnectionStatus("error")
+        setError("Failed to connect to real-time server. Backend may not be running.")
+      })
+      
+    } catch (err) {
+      console.error('Error connecting Socket.IO:', err)
+      setConnectionStatus("error")
+      setError("Socket.IO connection failed. Make sure socket.io-client is installed.")
+    }
+  }, [])
+
+  const disconnectWebSocket = () => {
+    if (socketRef.current) {
+      socketRef.current.emit('leave_room', { room: 'dashboard' })
+      socketRef.current.disconnect()
+      socketRef.current = null
+    }
+    setIsConnected(false)
+    setConnectionStatus("disconnected")
+  }
+
 
   const requestNotificationPermission = () => {
     if ('Notification' in window && Notification.permission === 'default') {
@@ -167,7 +218,7 @@ export default function RealtimeDashboard() {
     return () => {
       disconnectWebSocket()
     }
-  }, [])
+  }, [connectWebSocket])
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -270,11 +321,6 @@ export default function RealtimeDashboard() {
             {error && (
               <span className="text-sm text-destructive">{error}</span>
             )}
-            {realtimeData.length > 0 && (
-              <Badge variant="outline">
-                {realtimeData.length} data points
-              </Badge>
-            )}
           </div>
         </CardContent>
       </Card>
@@ -290,35 +336,65 @@ export default function RealtimeDashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  dataKey="time" 
-                  tick={{ fontSize: 12 }}
-                  interval="preserveStartEnd"
-                />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip 
-                  labelStyle={{ fontSize: 12 }}
-                  contentStyle={{ fontSize: 12 }}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="packets" 
-                  stroke="#3b82f6" 
-                  strokeWidth={2}
-                  name="Packets/sec"
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="threats" 
-                  stroke="#ef4444" 
-                  strokeWidth={2}
-                  name="Threats"
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {chartData.length === 0 ? (
+              <div className="flex items-center justify-center h-[300px] text-muted-foreground">
+                <div className="text-center">
+                  <Activity className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">Waiting for traffic data...</p>
+                  <p className="text-xs mt-1">WebSocket: {isConnected ? 'Connected' : 'Disconnected'}</p>
+                </div>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="time" 
+                    tick={{ fontSize: 12 }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 12 }}
+                    domain={[0, 'auto']}
+                  />
+                  <Tooltip 
+                    labelStyle={{ fontSize: 12 }}
+                    contentStyle={{ fontSize: 12 }}
+                    formatter={(value: any) => {
+                      if (typeof value === 'number') {
+                        return value.toFixed(2)
+                      }
+                      return value
+                    }}
+                  />
+                  <Legend 
+                    wrapperStyle={{ fontSize: 12 }}
+                    iconType="line"
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="packets" 
+                    stroke="#06b6d4" 
+                    strokeWidth={3}
+                    name="Packets/sec"
+                    dot={{ fill: "#06b6d4", r: 4 }}
+                    activeDot={{ r: 6 }}
+                    legendType="line"
+                    connectNulls={false}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="threats" 
+                    stroke="#ef4444" 
+                    strokeWidth={2}
+                    name="Threats Detected"
+                    dot={false}
+                    legendType="line"
+                    connectNulls={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
 
@@ -367,7 +443,12 @@ export default function RealtimeDashboard() {
           {liveAlerts.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No live alerts. Waiting for real-time data...</p>
+              <p className="font-medium mb-2">No live alerts detected</p>
+              <p className="text-sm">System is monitoring network traffic. Alerts will appear here when threats are detected.</p>
+              <p className="text-xs mt-2 opacity-75">
+                Connection: {isConnected ? 'Connected' : 'Disconnected'} • 
+                WebSocket: {connectionStatus}
+              </p>
             </div>
           ) : (
             <div className="space-y-3">

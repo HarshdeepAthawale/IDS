@@ -59,6 +59,12 @@ backend/
    python -c "from app import create_app; from models.db_models import init_db; app = create_app(); init_db(app)"
    ```
 
+5. **Train Anomaly Detection Model** (Optional but recommended):
+   ```bash
+   python scripts/train_anomaly_model.py
+   ```
+   This will generate synthetic packet data and train the Isolation Forest model for anomaly detection. The model will also auto-train when enough real packet data is collected (100+ samples).
+
 ## Configuration
 
 ### Environment Variables
@@ -105,7 +111,7 @@ WHITELIST_IPS=127.0.0.1,10.0.0.0/8,192.168.0.0/16
 python app.py
 ```
 
-The server will start on `http://localhost:5000`
+The server will start on `http://localhost:3002` (or the port specified in FLASK_PORT environment variable)
 
 ### Production Mode
 

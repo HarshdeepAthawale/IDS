@@ -12,13 +12,13 @@ export async function POST(request: Request) {
       
       return Response.json(flaskResponse)
     } catch (flaskError) {
-      console.warn("Flask backend unavailable, simulating response:", flaskError)
+      console.error("Flask backend unavailable for insider threat logging:", flaskError)
       
-      // Fallback to mock response
+      // Return proper error, no mock response
       return Response.json({
-        message: "Threat logged successfully (mock response)",
-        threat_id: Math.floor(Math.random() * 1000) + 1
-      })
+        error: "Backend service unavailable",
+        message: "Flask backend must be running for insider threat logging"
+      }, { status: 503 })
     }
   } catch (error) {
     console.error("Error logging insider threat:", error)

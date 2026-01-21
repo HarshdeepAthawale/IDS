@@ -58,6 +58,7 @@ ENV/
 # IDE files
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
@@ -215,6 +216,14 @@ whitelist_backups/
 # Model training data
 training_data/
 *.training
+
+# Datasets and large data files
+backend/data/
+backend/evaluation_results/
+backend/data/**
+*.csv
+!backend/env.example
+*.json.bak
 
 # Feature extraction cache
 feature_cache/

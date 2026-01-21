@@ -123,3 +123,21 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Recharts alignment fixes */
+.recharts-legend-item {
+  display: inline-flex !important;
+  align-items: center !important;
+  margin: 0 16px !important;
+}
+
+.recharts-legend-item-text {
+  display: inline-block !important;
+  vertical-align: middle !important;
+  line-height: 1 !important;
+  margin-left: 8px !important;
+}
+
+.recharts-cartesian-axis-tick-value {
+  dominant-baseline: middle !important;
+}

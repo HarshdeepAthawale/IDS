@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, memo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -8,9 +8,9 @@ import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { AlertCircle, TrendingUp, RefreshCw, CheckCircle, XCircle, MoreHorizontal, Calendar as CalendarIcon, Filter } from "lucide-react"
 import { flaskApi } from "@/lib/flask-api"
-import { config } from "@/lib/config"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
+import { useWebSocket } from "@/hooks/use-websocket"
 
 interface Alert {
   id: string
@@ -18,13 +18,22 @@ interface Alert {
   sourceIp: string
   destIp: string
   protocol: string
-  type: "signature" | "anomaly"
+  type: "signature" | "anomaly" | "classification"
   severity: "critical" | "high" | "medium" | "low"
   description: string
   resolved?: boolean
+  confidenceScore?: number
+  classificationResult?: {
+    label: string
+    confidence: number
+    probabilities?: {
+      benign: number
+      malicious: number
+    }
+  }
 }
 
-export default function AlertsOverview() {
+function AlertsOverview() {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -35,6 +44,9 @@ export default function AlertsOverview() {
     to: undefined
   })
   const [showDatePicker, setShowDatePicker] = useState(false)
+  
+  // Real-time WebSocket connection
+  const { isConnected, on, off } = useWebSocket({ room: 'dashboard' })
 
   const fetchAlertsData = useCallback(async () => {
     try {
@@ -60,7 +72,9 @@ export default function AlertsOverview() {
         type: alert.type,
         severity: alert.severity,
         description: alert.description,
-        resolved: alert.resolved || false
+        resolved: alert.resolved || false,
+        confidenceScore: alert.confidence_score,
+        classificationResult: alert.classification_result
       }))
       setAlerts(transformedAlerts)
     } catch (err) {
@@ -71,15 +85,77 @@ export default function AlertsOverview() {
     }
   }, [dateRange.from, dateRange.to])
 
+  // Initial fetch
   useEffect(() => {
     fetchAlertsData()
-    
-    // Set up polling if enabled - increased interval for better performance
-    if (config.features.polling) {
-      const interval = setInterval(fetchAlertsData, Math.max(config.polling.alerts, 10000)) // Min 10 seconds
-      return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateRange.from, dateRange.to]) // Only refetch when date range changes
+
+  // Real-time WebSocket updates
+  useEffect(() => {
+    if (!isConnected) {
+      // Only use polling as true fallback when WebSocket is disconnected
+      const fallbackInterval = setInterval(() => {
+        fetchAlertsData()
+      }, 5000)
+      return () => clearInterval(fallbackInterval)
     }
-  }, [fetchAlertsData])
+
+    // Listen for new alerts in real-time (no debounce for critical alerts)
+    const handleNewAlert = (data: any) => {
+      const alertData = data.data || data
+      const newAlert: Alert = {
+        id: alertData.alert_id || alertData.id || Date.now().toString(),
+        timestamp: alertData.timestamp || new Date().toISOString(),
+        sourceIp: alertData.source_ip || 'Unknown',
+        destIp: alertData.dest_ip || 'Unknown',
+        protocol: alertData.protocol || 'Unknown',
+        type: alertData.type || alertData.alert_type || 'anomaly',
+        severity: alertData.severity || 'medium',
+        description: alertData.description || 'New threat detected',
+        resolved: false,
+        confidenceScore: alertData.confidence_score,
+        classificationResult: alertData.classification_result
+      }
+      
+      // Only add if not in date range filter or matches filter
+      setAlerts(prev => {
+        // Check if alert already exists
+        const exists = prev.find(a => a.id === newAlert.id)
+        if (exists) return prev
+        
+        // If date range is set, check if alert matches
+        if (dateRange.from || dateRange.to) {
+          const alertDate = new Date(newAlert.timestamp)
+          if (dateRange.from && alertDate < dateRange.from) return prev
+          if (dateRange.to && alertDate > dateRange.to) return prev
+        }
+        
+        return [newAlert, ...prev]
+      })
+    }
+
+    // Listen for alert updates (resolved/unresolved)
+    const handleAlertUpdate = (data: any) => {
+      const updateData = data.data || data
+      if (updateData.alert_id) {
+        setAlerts(prev => prev.map(alert => 
+          alert.id === updateData.alert_id.toString() 
+            ? { ...alert, resolved: updateData.resolved ?? alert.resolved }
+            : alert
+        ))
+      }
+    }
+
+    on('new_alert', handleNewAlert)
+    on('alert_updated', handleAlertUpdate)
+
+    return () => {
+      off('new_alert', handleNewAlert)
+      off('alert_updated', handleAlertUpdate)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, dateRange.from, dateRange.to]) // on/off are stable from context
 
   // Alert management functions
   const handleAlertUpdate = async (alertId: string, resolved: boolean) => {
@@ -320,6 +396,28 @@ export default function AlertsOverview() {
                     )}
                   </div>
                   <p className="text-sm font-medium text-foreground">{alert.description}</p>
+                  {alert.classificationResult && (
+                    <div className="mt-2 p-2 rounded bg-blue-500/10 border border-blue-500/20">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="font-semibold text-blue-500">ML Classification:</span>
+                        <span className="text-foreground">{alert.classificationResult.label}</span>
+                        <span className="text-muted-foreground">
+                          (Confidence: {(alert.classificationResult.confidence * 100).toFixed(1)}%)
+                        </span>
+                        {alert.classificationResult.probabilities && (
+                          <span className="text-muted-foreground">
+                            | Benign: {(alert.classificationResult.probabilities.benign * 100).toFixed(1)}% 
+                            | Malicious: {(alert.classificationResult.probabilities.malicious * 100).toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {alert.confidenceScore && !alert.classificationResult && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Confidence: {(alert.confidenceScore * 100).toFixed(1)}%
+                    </div>
+                  )}
                   <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
                     <span>From: {alert.sourceIp}</span>
                     <span>To: {alert.destIp}</span>
@@ -354,3 +452,5 @@ export default function AlertsOverview() {
     </Card>
   )
 }
+
+export default memo(AlertsOverview)

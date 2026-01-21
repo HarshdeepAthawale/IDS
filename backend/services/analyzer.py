@@ -439,7 +439,7 @@ class AnomalyDetector:
 
 class PacketAnalyzer:
     """
-    Main packet analyzer combining signature and anomaly detection
+    Main packet analyzer combining signature, anomaly, and classification detection
     """
     
     def __init__(self, config):
@@ -454,11 +454,31 @@ class PacketAnalyzer:
         self.anomaly_detector = AnomalyDetector(config)
         self.last_model_training = datetime.utcnow()
         
+        # Initialize classification detector if enabled
+        self.classification_detector = None
+        self.feature_extractor = None
+        self.data_collector = None
+        
+        classification_enabled = getattr(config, 'CLASSIFICATION_ENABLED', False)
+        if classification_enabled:
+            try:
+                from services.classifier import ClassificationDetector
+                from services.feature_extractor import FeatureExtractor
+                from services.data_collector import DataCollector
+                
+                self.classification_detector = ClassificationDetector(config)
+                self.feature_extractor = FeatureExtractor(config)
+                self.data_collector = DataCollector(config)
+                
+                logger.info("Classification detector enabled")
+            except Exception as e:
+                logger.warning(f"Could not initialize classification detector: {e}")
+        
         logger.info("PacketAnalyzer initialized")
     
     def analyze_packet(self, packet_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Analyze packet using both signature and anomaly detection
+        Analyze packet using signature, anomaly, and classification detection
         
         Args:
             packet_data: Parsed packet data
@@ -473,6 +493,12 @@ class PacketAnalyzer:
             sig_result = self.signature_detector.analyze_packet(packet_data)
             if sig_result:
                 detections.append(sig_result)
+                
+                # Record failed login attempts for classification features
+                if sig_result.get('signature_id') == 'brute_force' and self.feature_extractor:
+                    src_ip = packet_data.get('src_ip')
+                    if src_ip:
+                        self.feature_extractor.record_failed_login(src_ip)
             
             # Connection pattern analysis
             pattern_result = self.signature_detector.analyze_connection_pattern(packet_data)
@@ -483,6 +509,60 @@ class PacketAnalyzer:
             anomaly_result = self.anomaly_detector.detect_anomaly(packet_data)
             if anomaly_result:
                 detections.append(anomaly_result)
+            
+            # Supervised classification detection
+            if self.classification_detector and self.feature_extractor:
+                try:
+                    # Extract features for classification
+                    packet_features = self.feature_extractor.extract_features(packet_data)
+                    
+                    # If model has stored feature names, ensure we provide features in correct format
+                    # The classifier will handle padding/truncation automatically
+                    features = packet_features
+                    
+                    # Classify packet
+                    classification_result = self.classification_detector.classify(features)
+                    
+                    # If classified as malicious and confidence exceeds threshold
+                    confidence_threshold = getattr(self.config, 'CLASSIFICATION_CONFIDENCE_THRESHOLD', 0.7)
+                    if (classification_result.get('label') == 'malicious' and 
+                        classification_result.get('confidence', 0) >= confidence_threshold):
+                        
+                        detections.append({
+                            'type': 'classification',
+                            'signature_id': 'ml_classification',
+                            'severity': 'high' if classification_result.get('confidence', 0) > 0.9 else 'medium',
+                            'description': f'Malicious traffic classified by ML model (confidence: {classification_result.get("confidence", 0):.2f})',
+                            'confidence': classification_result.get('confidence', 0),
+                            'matched_pattern': 'supervised_classification',
+                            'source': 'classification_ml',
+                            'classification_result': classification_result
+                        })
+                    
+                    # Collect sample for training (auto-label based on signature detection)
+                    if self.data_collector:
+                        # Auto-label: if signature detected, label as malicious; otherwise benign
+                        label = None
+                        labeled_by = 'auto'
+                        confidence = 0.5
+                        
+                        if sig_result or pattern_result or anomaly_result:
+                            label = 'malicious'
+                            confidence = 0.8
+                        else:
+                            label = 'benign'
+                            confidence = 0.6
+                        
+                        self.data_collector.collect_sample(
+                            features=features,
+                            packet_data=packet_data,
+                            label=label,
+                            labeled_by=labeled_by,
+                            confidence=confidence
+                        )
+                        
+                except Exception as e:
+                    logger.error(f"Error in classification detection: {e}")
             
             # Retrain model periodically
             if (datetime.utcnow() - self.last_model_training).total_seconds() > self.config.MODEL_RETRAIN_INTERVAL:
@@ -502,10 +582,23 @@ class PacketAnalyzer:
         Returns:
             Dictionary with model statistics
         """
-        return {
+        stats = {
             'is_trained': self.anomaly_detector.is_trained,
             'training_samples': len(self.anomaly_detector.feature_data),
             'last_training': self.last_model_training.isoformat(),
             'signature_count': len(self.signature_detector.signatures),
             'recent_packets': len(self.signature_detector.recent_packets)
         }
+        
+        # Add classification detector stats if enabled
+        if self.classification_detector:
+            classification_info = self.classification_detector.get_model_info()
+            stats['classification'] = {
+                'enabled': True,
+                'is_trained': classification_info.get('is_trained', False),
+                'model_type': classification_info.get('model_type', 'unknown')
+            }
+        else:
+            stats['classification'] = {'enabled': False}
+        
+        return stats

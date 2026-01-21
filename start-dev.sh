@@ -20,7 +20,7 @@ echo
 echo "Both services are starting up..."
 echo
 echo "Flask Backend: http://localhost:3002"
-echo "Next.js Frontend: http://localhost:3001"
+echo "Next.js Frontend: http://localhost:3000"
 echo
 echo "Press Ctrl+C to stop both services..."
 

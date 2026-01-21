@@ -10,11 +10,12 @@ import { flaskApi } from "@/lib/flask-api"
 import { format } from "date-fns"
 
 interface AlertSummary {
-  total_alerts: number
+  total_alerts?: number
+  total_recent_alerts?: number
   unresolved_alerts: number
   alerts_by_severity: Record<string, number>
   alerts_by_type: Record<string, number>
-  recent_trends: Array<{
+  recent_trends?: Array<{
     date: string
     count: number
   }>
@@ -116,7 +117,9 @@ export default function SummaryPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-3xl font-bold text-foreground">{alertSummary.total_alerts}</div>
+                <div className="text-3xl font-bold text-foreground">
+                  {alertSummary.total_alerts ?? alertSummary.total_recent_alerts ?? 0}
+                </div>
                 <div className="text-sm text-muted-foreground mt-1">
                   {alertSummary.unresolved_alerts} unresolved
                 </div>
@@ -132,10 +135,10 @@ export default function SummaryPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold text-destructive">
-                  {alertSummary.alerts_by_severity.critical || 0}
+                  {alertSummary.alerts_by_severity?.critical || 0}
                 </div>
                 <div className="text-sm text-muted-foreground mt-1">
-                  High: {alertSummary.alerts_by_severity.high || 0}
+                  High: {alertSummary.alerts_by_severity?.high || 0}
                 </div>
               </CardContent>
             </Card>
@@ -151,11 +154,11 @@ export default function SummaryPage() {
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-muted-foreground">Signature</span>
-                    <Badge variant="outline">{alertSummary.alerts_by_type.signature || 0}</Badge>
+                    <Badge variant="outline">{alertSummary.alerts_by_type?.signature || 0}</Badge>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-muted-foreground">Anomaly</span>
-                    <Badge variant="outline">{alertSummary.alerts_by_type.anomaly || 0}</Badge>
+                    <Badge variant="outline">{alertSummary.alerts_by_type?.anomaly || 0}</Badge>
                   </div>
                 </div>
               </CardContent>
@@ -170,7 +173,9 @@ export default function SummaryPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold text-foreground">
-                  {alertSummary.recent_trends[alertSummary.recent_trends.length - 1]?.count || 0}
+                  {alertSummary.recent_trends && alertSummary.recent_trends.length > 0
+                    ? alertSummary.recent_trends[alertSummary.recent_trends.length - 1]?.count || 0
+                    : 0}
                 </div>
                 <div className="text-sm text-muted-foreground mt-1">
                   Last 5 days average
@@ -214,14 +219,18 @@ export default function SummaryPage() {
 
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-foreground">Risk Distribution</h4>
-                  {Object.entries(insiderSummary.risk_distribution).map(([level, count]) => (
-                    <div key={level} className="flex items-center justify-between">
-                      <span className={`text-sm font-medium ${getRiskLevelColor(level)}`}>
-                        {level.charAt(0).toUpperCase() + level.slice(1)}
-                      </span>
-                      <Badge variant="outline">{count}</Badge>
-                    </div>
-                  ))}
+                  {insiderSummary.risk_distribution && Object.keys(insiderSummary.risk_distribution).length > 0 ? (
+                    Object.entries(insiderSummary.risk_distribution).map(([level, count]) => (
+                      <div key={level} className="flex items-center justify-between">
+                        <span className={`text-sm font-medium ${getRiskLevelColor(level)}`}>
+                          {level.charAt(0).toUpperCase() + level.slice(1)}
+                        </span>
+                        <Badge variant="outline">{count}</Badge>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-sm text-muted-foreground">No risk distribution data available</div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -235,14 +244,18 @@ export default function SummaryPage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {Object.entries(insiderSummary.activities_by_type).map(([type, count]) => (
-                    <div key={type} className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground capitalize">
-                        {type.replace('_', ' ')}
-                      </span>
-                      <Badge variant="outline">{count}</Badge>
-                    </div>
-                  ))}
+                  {insiderSummary.activities_by_type && Object.keys(insiderSummary.activities_by_type).length > 0 ? (
+                    Object.entries(insiderSummary.activities_by_type).map(([type, count]) => (
+                      <div key={type} className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground capitalize">
+                          {type.replace('_', ' ')}
+                        </span>
+                        <Badge variant="outline">{count}</Badge>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-sm text-muted-foreground">No activity data available</div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -260,25 +273,29 @@ export default function SummaryPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {insiderSummary.top_threats.map((threat, index) => (
-                  <div key={threat.user_id} className="flex items-center justify-between p-3 rounded-lg bg-background border border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-sm font-medium">
-                        {index + 1}
+                {insiderSummary.top_threats && insiderSummary.top_threats.length > 0 ? (
+                  insiderSummary.top_threats.map((threat, index) => (
+                    <div key={threat.user_id} className="flex items-center justify-between p-3 rounded-lg bg-background border border-border">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-sm font-medium">
+                          {index + 1}
+                        </div>
+                        <div>
+                          <div className="font-medium text-foreground">{threat.username}</div>
+                          <div className="text-sm text-muted-foreground">User ID: {threat.user_id}</div>
+                        </div>
                       </div>
-                      <div>
-                        <div className="font-medium text-foreground">{threat.username}</div>
-                        <div className="text-sm text-muted-foreground">User ID: {threat.user_id}</div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">{threat.threat_count} threats</Badge>
+                        <Badge className={getSeverityColor(threat.risk_level)}>
+                          {threat.risk_level.toUpperCase()}
+                        </Badge>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline">{threat.threat_count} threats</Badge>
-                      <Badge className={getSeverityColor(threat.risk_level)}>
-                        {threat.risk_level.toUpperCase()}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No threat data available</div>
+                )}
               </div>
             </CardContent>
           </Card>

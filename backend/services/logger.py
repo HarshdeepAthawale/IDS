@@ -7,8 +7,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
-from sqlalchemy import and_, func, desc
-from models.db_models import db, Alert, TrafficStat, UserActivity, WhitelistRule
+from models.db_models import (
+    alerts_collection, traffic_stats_collection, user_activities_collection,
+    alert_to_dict, traffic_stat_to_dict, user_activity_to_dict, to_object_id
+)
 from .cache import CacheService, CachePrefixes, CacheTTL
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ class DatabaseLogger:
         
         logger.info("DatabaseLogger initialized with caching")
     
-    def log_alert(self, detection_result: Dict[str, Any], packet_data: Dict[str, Any]) -> Optional[Alert]:
+    def log_alert(self, detection_result: Dict[str, Any], packet_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Log security alert to database with deduplication
         
@@ -44,7 +46,7 @@ class DatabaseLogger:
             packet_data: Original packet data
             
         Returns:
-            Alert object if created, None if deduplicated
+            Alert document if created, None if deduplicated
         """
         try:
             # Create deduplication key
@@ -56,27 +58,30 @@ class DatabaseLogger:
                 logger.debug(f"Deduplicated alert: {dedup_key}")
                 return None
             
-            # Create alert object
-            alert = Alert(
-                source_ip=packet_data.get('src_ip', 'unknown'),
-                dest_ip=packet_data.get('dst_ip', 'unknown'),
-                protocol=packet_data.get('protocol', 'unknown'),
-                port=packet_data.get('dst_port'),
-                type=detection_result.get('type', 'unknown'),
-                severity=detection_result.get('severity', 'medium'),
-                description=detection_result.get('description', ''),
-                confidence_score=detection_result.get('confidence'),
-                signature_id=detection_result.get('signature_id'),
-                timestamp=current_time,
-                payload_size=packet_data.get('payload_size'),
-                flags=packet_data.get('flags'),
-                user_agent=packet_data.get('user_agent'),
-                uri=packet_data.get('uri')
-            )
+            # Create alert document
+            alert_doc = {
+                'source_ip': packet_data.get('src_ip', 'unknown'),
+                'dest_ip': packet_data.get('dst_ip', 'unknown'),
+                'protocol': packet_data.get('protocol', 'unknown'),
+                'port': packet_data.get('dst_port'),
+                'type': detection_result.get('type', 'unknown'),
+                'severity': detection_result.get('severity', 'medium'),
+                'description': detection_result.get('description', ''),
+                'confidence_score': detection_result.get('confidence'),
+                'signature_id': detection_result.get('signature_id'),
+                'timestamp': current_time,
+                'resolved': False,
+                'resolved_at': None,
+                'resolved_by': None,
+                'payload_size': packet_data.get('payload_size'),
+                'flags': packet_data.get('flags'),
+                'user_agent': packet_data.get('user_agent'),
+                'uri': packet_data.get('uri')
+            }
             
             # Save to database
-            db.session.add(alert)
-            db.session.commit()
+            result = alerts_collection.insert_one(alert_doc)
+            alert_doc['_id'] = result.inserted_id
             
             # Update cache
             self.alert_cache[dedup_key] = current_time
@@ -84,12 +89,11 @@ class DatabaseLogger:
             # Clean old cache entries
             self._clean_alert_cache()
             
-            logger.info(f"Logged alert: {alert.id} - {alert.type} - {alert.severity}")
-            return alert
+            logger.info(f"Logged alert: {result.inserted_id} - {alert_doc['type']} - {alert_doc['severity']}")
+            return alert_doc
             
         except Exception as e:
             logger.error(f"Error logging alert: {e}")
-            db.session.rollback()
             return None
     
     def _create_dedup_key(self, detection_result: Dict[str, Any], packet_data: Dict[str, Any]) -> str:
@@ -134,14 +138,20 @@ class DatabaseLogger:
         if len(parts) >= 3:
             source_ip, signature_id, dest_port = parts[0], parts[1], parts[2]
             
-            recent_alert = Alert.query.filter(
-                and_(
-                    Alert.source_ip == source_ip,
-                    Alert.signature_id == signature_id,
-                    Alert.port == (int(dest_port) if dest_port.isdigit() else None),
-                    Alert.timestamp > cutoff_time
-                )
-            ).first()
+            query = {
+                'source_ip': source_ip,
+                'signature_id': signature_id,
+                'timestamp': {'$gt': cutoff_time}
+            }
+            
+            # Add port filter if it's a number
+            try:
+                port_int = int(dest_port)
+                query['port'] = port_int
+            except (ValueError, TypeError):
+                query['port'] = dest_port
+            
+            recent_alert = alerts_collection.find_one(query)
             
             if recent_alert:
                 return True
@@ -180,9 +190,10 @@ class DatabaseLogger:
             self.traffic_stats_cache[f'src_ip_{src_ip}'] += 1
             self.traffic_stats_cache[f'dst_port_{dst_port}'] += 1
             
-            # Flush to database periodically
+            # Flush to database periodically (30 seconds instead of 60)
             current_time = datetime.utcnow()
-            if (current_time - self.last_traffic_flush).total_seconds() > 60:  # Flush every minute
+            flush_interval = getattr(self.config, 'TRAFFIC_STATS_FLUSH_INTERVAL', 30)
+            if (current_time - self.last_traffic_flush).total_seconds() > flush_interval:
                 self._flush_traffic_stats()
                 
         except Exception as e:
@@ -233,30 +244,32 @@ class DatabaseLogger:
             ))
             
             # Get recent anomaly count
-            recent_anomalies = Alert.query.filter(
-                and_(
-                    Alert.type == 'anomaly',
-                    Alert.timestamp > datetime.utcnow() - timedelta(minutes=1)
-                )
-            ).count()
+            recent_cutoff = datetime.utcnow() - timedelta(minutes=1)
+            recent_anomalies = alerts_collection.count_documents({
+                'type': 'anomaly',
+                'timestamp': {'$gt': recent_cutoff}
+            })
             
-            # Create traffic stat record
-            traffic_stat = TrafficStat(
-                total_packets=total_packets,
-                total_bytes=total_bytes,
-                active_connections=active_connections,
-                protocol_distribution=protocol_dist,
-                anomaly_count=recent_anomalies,
-                packet_rate=total_packets / 60.0,  # packets per second (1 minute window)
-                byte_rate=total_bytes / 60.0,  # bytes per second
-                top_source_ips=top_source_ips,
-                top_dest_ports=top_dest_ports,
-                avg_packet_size=total_bytes / total_packets if total_packets > 0 else 0,
-                timestamp=datetime.utcnow()
-            )
+            # Calculate flush interval for rate calculations
+            flush_interval = getattr(self.config, 'TRAFFIC_STATS_FLUSH_INTERVAL', 30)
             
-            db.session.add(traffic_stat)
-            db.session.commit()
+            # Create traffic stat document
+            traffic_stat_doc = {
+                'total_packets': total_packets,
+                'total_bytes': total_bytes,
+                'active_connections': active_connections,
+                'protocol_distribution': protocol_dist,
+                'anomaly_count': recent_anomalies,
+                'packet_rate': total_packets / flush_interval if flush_interval > 0 else 0,  # packets per second
+                'byte_rate': total_bytes / flush_interval if flush_interval > 0 else 0,  # bytes per second
+                'top_source_ips': top_source_ips,
+                'top_dest_ports': top_dest_ports,
+                'avg_packet_size': total_bytes / total_packets if total_packets > 0 else 0,
+                'connection_success_rate': None,  # Can be calculated later if needed
+                'timestamp': datetime.utcnow()
+            }
+            
+            traffic_stats_collection.insert_one(traffic_stat_doc)
             
             # Clear cache
             self.traffic_stats_cache.clear()
@@ -266,10 +279,9 @@ class DatabaseLogger:
             
         except Exception as e:
             logger.error(f"Error flushing traffic stats: {e}")
-            db.session.rollback()
     
     def log_user_activity(self, user_id: str, username: str, activity_type: str, 
-                         severity: str, description: str, **kwargs) -> Optional[UserActivity]:
+                         severity: str, description: str, **kwargs) -> Optional[Dict[str, Any]]:
         """
         Log user activity for insider threat detection
         
@@ -282,38 +294,37 @@ class DatabaseLogger:
             **kwargs: Additional activity data
             
         Returns:
-            UserActivity object if created
+            UserActivity document if created
         """
         try:
-            activity = UserActivity(
-                user_id=user_id,
-                username=username,
-                activity_type=activity_type,
-                severity=severity,
-                description=description,
-                source_ip=kwargs.get('source_ip'),
-                destination=kwargs.get('destination'),
-                command=kwargs.get('command'),
-                file_size=kwargs.get('file_size'),
-                success=kwargs.get('success'),
-                session_id=kwargs.get('session_id'),
-                user_agent=kwargs.get('user_agent'),
-                geolocation=kwargs.get('geolocation'),
-                timestamp=datetime.utcnow()
-            )
+            activity_doc = {
+                'user_id': user_id,
+                'username': username,
+                'activity_type': activity_type,
+                'severity': severity,
+                'description': description,
+                'source_ip': kwargs.get('source_ip'),
+                'destination': kwargs.get('destination'),
+                'command': kwargs.get('command'),
+                'file_size': kwargs.get('file_size'),
+                'success': kwargs.get('success'),
+                'session_id': kwargs.get('session_id'),
+                'user_agent': kwargs.get('user_agent'),
+                'geolocation': kwargs.get('geolocation'),
+                'timestamp': datetime.utcnow()
+            }
             
-            db.session.add(activity)
-            db.session.commit()
+            result = user_activities_collection.insert_one(activity_doc)
+            activity_doc['_id'] = result.inserted_id
             
             logger.info(f"Logged user activity: {user_id} - {activity_type} - {severity}")
-            return activity
+            return activity_doc
             
         except Exception as e:
             logger.error(f"Error logging user activity: {e}")
-            db.session.rollback()
             return None
     
-    def get_recent_alerts(self, limit: int = 100, **filters) -> List[Alert]:
+    def get_recent_alerts(self, limit: int = 100, **filters) -> List[Dict[str, Any]]:
         """
         Get recent alerts with optional filtering and caching
         
@@ -322,7 +333,7 @@ class DatabaseLogger:
             **filters: Filter parameters (type, severity, resolved, etc.)
             
         Returns:
-            List of Alert objects
+            List of alert documents
         """
         try:
             # Create cache key based on filters
@@ -332,45 +343,52 @@ class DatabaseLogger:
             cached_result = self.cache.get(CachePrefixes.ALERTS, cache_key)
             if cached_result:
                 logger.debug("Returning alerts from cache")
-                return [Alert(**alert_data) for alert_data in cached_result]
+                return cached_result
             
-            query = Alert.query
+            # Build MongoDB query
+            query = {}
             
             # Apply filters
             if filters.get('type'):
-                query = query.filter(Alert.type == filters['type'])
+                query['type'] = filters['type']
             
             if filters.get('severity'):
-                query = query.filter(Alert.severity == filters['severity'])
+                query['severity'] = filters['severity']
             
             if filters.get('resolved') is not None:
-                query = query.filter(Alert.resolved == filters['resolved'])
+                query['resolved'] = filters['resolved']
             
             if filters.get('start_date'):
-                query = query.filter(Alert.timestamp >= filters['start_date'])
+                if 'timestamp' not in query:
+                    query['timestamp'] = {}
+                query['timestamp']['$gte'] = filters['start_date']
             
             if filters.get('end_date'):
-                query = query.filter(Alert.timestamp <= filters['end_date'])
+                if 'timestamp' not in query:
+                    query['timestamp'] = {}
+                query['timestamp']['$lte'] = filters['end_date']
             
             if filters.get('source_ip'):
-                query = query.filter(Alert.source_ip == filters['source_ip'])
+                query['source_ip'] = filters['source_ip']
             
-            # Order by timestamp (newest first) and limit
-            query = query.order_by(desc(Alert.timestamp)).limit(limit)
+            # Execute query with sort and limit
+            alerts = list(alerts_collection.find(query)
+                         .sort('timestamp', -1)
+                         .limit(limit))
             
-            alerts = query.all()
+            # Convert to dictionaries with string IDs
+            alert_dicts = [alert_to_dict(alert) for alert in alerts]
             
             # Cache the result
-            alert_dicts = [alert.to_dict() for alert in alerts]
             self.cache.set(CachePrefixes.ALERTS, cache_key, alert_dicts, CacheTTL.SHORT)
             
-            return alerts
+            return alerts  # Return raw documents for compatibility
             
         except Exception as e:
             logger.error(f"Error getting recent alerts: {e}")
             return []
     
-    def get_traffic_stats(self, limit: int = 24) -> List[TrafficStat]:
+    def get_traffic_stats(self, limit: int = 24) -> List[Dict[str, Any]]:
         """
         Get recent traffic statistics with caching
         
@@ -378,7 +396,7 @@ class DatabaseLogger:
             limit: Number of recent records to return
             
         Returns:
-            List of TrafficStat objects
+            List of traffic stat documents
         """
         try:
             cache_key = f"recent_{limit}"
@@ -387,12 +405,14 @@ class DatabaseLogger:
             cached_result = self.cache.get(CachePrefixes.TRAFFIC_STATS, cache_key)
             if cached_result:
                 logger.debug("Returning traffic stats from cache")
-                return [TrafficStat(**stat_data) for stat_data in cached_result]
+                return cached_result
             
-            stats = TrafficStat.query.order_by(desc(TrafficStat.timestamp)).limit(limit).all()
+            stats = list(traffic_stats_collection.find()
+                        .sort('timestamp', -1)
+                        .limit(limit))
             
             # Cache the result
-            stat_dicts = [stat.to_dict() for stat in stats]
+            stat_dicts = [traffic_stat_to_dict(stat) for stat in stats]
             self.cache.set(CachePrefixes.TRAFFIC_STATS, cache_key, stat_dicts, CacheTTL.SHORT)
             
             return stats
@@ -401,7 +421,7 @@ class DatabaseLogger:
             logger.error(f"Error getting traffic stats: {e}")
             return []
     
-    def get_user_activities(self, limit: int = 100, **filters) -> List[UserActivity]:
+    def get_user_activities(self, limit: int = 100, **filters) -> List[Dict[str, Any]]:
         """
         Get user activities with optional filtering
         
@@ -410,65 +430,171 @@ class DatabaseLogger:
             **filters: Filter parameters (user_id, severity, activity_type, etc.)
             
         Returns:
-            List of UserActivity objects
+            List of user activity documents
         """
         try:
-            query = UserActivity.query
+            # Check if collection is initialized
+            if user_activities_collection is None:
+                logger.warning("User activities collection not initialized, returning empty list")
+                return []
+            
+            # Build MongoDB query
+            query = {}
             
             # Apply filters
             if filters.get('user_id'):
-                query = query.filter(UserActivity.user_id == filters['user_id'])
+                query['user_id'] = filters['user_id']
             
             if filters.get('severity'):
-                query = query.filter(UserActivity.severity == filters['severity'])
+                query['severity'] = filters['severity']
             
             if filters.get('activity_type'):
-                query = query.filter(UserActivity.activity_type == filters['activity_type'])
+                query['activity_type'] = filters['activity_type']
             
             if filters.get('start_date'):
-                query = query.filter(UserActivity.timestamp >= filters['start_date'])
+                if 'timestamp' not in query:
+                    query['timestamp'] = {}
+                query['timestamp']['$gte'] = filters['start_date']
             
             if filters.get('end_date'):
-                query = query.filter(UserActivity.timestamp <= filters['end_date'])
+                if 'timestamp' not in query:
+                    query['timestamp'] = {}
+                query['timestamp']['$lte'] = filters['end_date']
             
-            # Order by timestamp (newest first) and limit
-            query = query.order_by(desc(UserActivity.timestamp)).limit(limit)
+            # Execute query with sort and limit
+            activities = list(user_activities_collection.find(query)
+                             .sort('timestamp', -1)
+                             .limit(limit))
             
-            return query.all()
+            return activities
             
         except Exception as e:
             logger.error(f"Error getting user activities: {e}")
             return []
     
-    def resolve_alert(self, alert_id: int, resolved_by: str = None) -> bool:
+    def get_realtime_stats(self) -> Dict[str, Any]:
+        """
+        Get real-time traffic statistics from in-memory cache
+        
+        Returns:
+            Dictionary with current real-time stats (not yet flushed to DB)
+        """
+        try:
+            if not self.traffic_stats_cache:
+                return {
+                    'total_packets': 0,
+                    'total_bytes': 0,
+                    'active_connections': 0,
+                    'protocol_distribution': {},
+                    'top_source_ips': [],
+                    'top_dest_ports': [],
+                    'packet_rate': 0,
+                    'byte_rate': 0,
+                    'avg_packet_size': 0,
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+            
+            # Calculate protocol distribution
+            protocol_dist = {}
+            src_ip_counts = {}
+            dst_port_counts = {}
+            
+            for key, count in self.traffic_stats_cache.items():
+                if key.startswith('protocol_'):
+                    protocol = key.replace('protocol_', '')
+                    protocol_dist[protocol] = count
+                elif key.startswith('src_ip_'):
+                    src_ip = key.replace('src_ip_', '')
+                    src_ip_counts[src_ip] = count
+                elif key.startswith('dst_port_'):
+                    port = key.replace('dst_port_', '')
+                    dst_port_counts[port] = count
+            
+            # Get top talkers (limit to 10)
+            top_source_ips = [
+                {'ip': ip, 'count': count}
+                for ip, count in sorted(src_ip_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            ]
+            
+            # Get top destination ports (limit to 10)
+            top_dest_ports = [
+                {'port': port, 'count': count}
+                for port, count in sorted(dst_port_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            ]
+            
+            total_packets = self.traffic_stats_cache.get('total_packets', 0)
+            total_bytes = self.traffic_stats_cache.get('total_bytes', 0)
+            
+            # Calculate rates based on time since last flush
+            time_since_flush = (datetime.utcnow() - self.last_traffic_flush).total_seconds()
+            if time_since_flush > 0:
+                packet_rate = total_packets / time_since_flush
+                byte_rate = total_bytes / time_since_flush
+            else:
+                packet_rate = 0
+                byte_rate = 0
+            
+            # Estimate active connections
+            active_connections = len(set(
+                key.replace('src_ip_', '') for key in self.traffic_stats_cache.keys()
+                if key.startswith('src_ip_')
+            ))
+            
+            return {
+                'total_packets': total_packets,
+                'total_bytes': total_bytes,
+                'active_connections': active_connections,
+                'protocol_distribution': protocol_dist,
+                'top_source_ips': top_source_ips,
+                'top_dest_ports': top_dest_ports,
+                'packet_rate': packet_rate,
+                'byte_rate': byte_rate,
+                'avg_packet_size': total_bytes / total_packets if total_packets > 0 else 0,
+                'timestamp': datetime.utcnow().isoformat(),
+                'cache_age_seconds': time_since_flush
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting real-time stats: {e}")
+            return {}
+    
+    def resolve_alert(self, alert_id: str, resolved_by: str = None) -> bool:
         """
         Mark alert as resolved
         
         Args:
-            alert_id: Alert ID to resolve
+            alert_id: Alert ID to resolve (string or ObjectId)
             resolved_by: User who resolved the alert
             
         Returns:
             True if successful
         """
         try:
-            alert = Alert.query.get(alert_id)
-            if not alert:
-                logger.warning(f"Alert {alert_id} not found")
+            obj_id = to_object_id(alert_id)
+            if not obj_id:
+                logger.warning(f"Invalid alert ID format: {alert_id}")
                 return False
             
-            alert.resolved = True
-            alert.resolved_at = datetime.utcnow()
-            alert.resolved_by = resolved_by
+            result = alerts_collection.update_one(
+                {'_id': obj_id},
+                {
+                    '$set': {
+                        'resolved': True,
+                        'resolved_at': datetime.utcnow(),
+                        'resolved_by': resolved_by
+                    }
+                }
+            )
             
-            db.session.commit()
+            if result.matched_count == 0:
+                logger.warning(f"Alert {alert_id} not found")
+                return False
             
             logger.info(f"Resolved alert {alert_id} by {resolved_by}")
             return True
             
         except Exception as e:
             logger.error(f"Error resolving alert: {e}")
-            db.session.rollback()
             return False
     
     def get_alert_summary(self) -> Dict[str, Any]:
@@ -479,6 +605,17 @@ class DatabaseLogger:
             Dictionary with alert statistics
         """
         try:
+            # Check if collection is initialized
+            if alerts_collection is None:
+                logger.warning("Alerts collection not initialized, returning empty summary")
+                return {
+                    'total_recent_alerts': 0,
+                    'unresolved_alerts': 0,
+                    'alerts_by_type': {},
+                    'alerts_by_severity': {},
+                    'last_updated': datetime.utcnow().isoformat()
+                }
+            
             cache_key = "summary"
             
             # Try cache first
@@ -491,26 +628,38 @@ class DatabaseLogger:
             
             # Recent alerts (last 24 hours)
             recent_cutoff = current_time - timedelta(hours=24)
-            recent_alerts = Alert.query.filter(Alert.timestamp > recent_cutoff).count()
+            recent_alerts = alerts_collection.count_documents({
+                'timestamp': {'$gt': recent_cutoff}
+            })
             
             # Unresolved alerts
-            unresolved_alerts = Alert.query.filter(Alert.resolved == False).count()
+            unresolved_alerts = alerts_collection.count_documents({
+                'resolved': False
+            })
             
-            # Alerts by type
-            type_counts = db.session.query(
-                Alert.type, func.count(Alert.id)
-            ).filter(Alert.timestamp > recent_cutoff).group_by(Alert.type).all()
+            # Alerts by type using aggregation
+            type_pipeline = [
+                {'$match': {'timestamp': {'$gt': recent_cutoff}}},
+                {'$group': {'_id': '$type', 'count': {'$sum': 1}}}
+            ]
+            type_counts = {}
+            for result in alerts_collection.aggregate(type_pipeline):
+                type_counts[result['_id']] = result['count']
             
-            # Alerts by severity
-            severity_counts = db.session.query(
-                Alert.severity, func.count(Alert.id)
-            ).filter(Alert.timestamp > recent_cutoff).group_by(Alert.severity).all()
+            # Alerts by severity using aggregation
+            severity_pipeline = [
+                {'$match': {'timestamp': {'$gt': recent_cutoff}}},
+                {'$group': {'_id': '$severity', 'count': {'$sum': 1}}}
+            ]
+            severity_counts = {}
+            for result in alerts_collection.aggregate(severity_pipeline):
+                severity_counts[result['_id']] = result['count']
             
             summary = {
                 'total_recent_alerts': recent_alerts,
                 'unresolved_alerts': unresolved_alerts,
-                'alerts_by_type': dict(type_counts),
-                'alerts_by_severity': dict(severity_counts),
+                'alerts_by_type': type_counts,
+                'alerts_by_severity': severity_counts,
                 'last_updated': current_time.isoformat()
             }
             
@@ -534,21 +683,24 @@ class DatabaseLogger:
             cutoff_date = datetime.utcnow() - timedelta(days=days_to_keep)
             
             # Delete old alerts
-            old_alerts = Alert.query.filter(Alert.timestamp < cutoff_date).count()
-            Alert.query.filter(Alert.timestamp < cutoff_date).delete()
+            old_alerts_result = alerts_collection.delete_many({
+                'timestamp': {'$lt': cutoff_date}
+            })
+            old_alerts = old_alerts_result.deleted_count
             
             # Delete old traffic stats
-            old_traffic = TrafficStat.query.filter(TrafficStat.timestamp < cutoff_date).count()
-            TrafficStat.query.filter(TrafficStat.timestamp < cutoff_date).delete()
+            old_traffic_result = traffic_stats_collection.delete_many({
+                'timestamp': {'$lt': cutoff_date}
+            })
+            old_traffic = old_traffic_result.deleted_count
             
             # Delete old user activities
-            old_activities = UserActivity.query.filter(UserActivity.timestamp < cutoff_date).count()
-            UserActivity.query.filter(UserActivity.timestamp < cutoff_date).delete()
-            
-            db.session.commit()
+            old_activities_result = user_activities_collection.delete_many({
+                'timestamp': {'$lt': cutoff_date}
+            })
+            old_activities = old_activities_result.deleted_count
             
             logger.info(f"Cleaned up old data: {old_alerts} alerts, {old_traffic} traffic stats, {old_activities} activities")
             
         except Exception as e:
             logger.error(f"Error cleaning up old data: {e}")
-            db.session.rollback()

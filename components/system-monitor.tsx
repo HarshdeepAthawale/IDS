@@ -1,10 +1,12 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, memo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Activity, Server, Database, Cpu, AlertTriangle } from "lucide-react"
 import { flaskApi } from "@/lib/flask-api"
+import { useWebSocket } from "@/hooks/use-websocket"
+import { useDebounce } from "@/hooks/use-debounce"
 
 interface SystemInfo {
   system_info: {
@@ -55,40 +57,179 @@ interface ConnectionStats {
   }>
 }
 
-export default function SystemMonitor() {
+function SystemMonitor() {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
   const [anomalyStats, setAnomalyStats] = useState<AnomalyStats | null>(null)
   const [connectionStats, setConnectionStats] = useState<ConnectionStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [fetchErrors, setFetchErrors] = useState<{
+    system?: string
+    anomalies?: string
+    connections?: string
+  }>({})
+  
+  // Real-time WebSocket connection
+  const { isConnected, isConnecting, on, off } = useWebSocket({ room: 'dashboard' })
+  
+  // Debounced state for updates
+  const [pendingAnomalyUpdate, setPendingAnomalyUpdate] = useState<Partial<AnomalyStats['anomaly_stats']> | null>(null)
+  const [pendingConnectionUpdate, setPendingConnectionUpdate] = useState<Partial<ConnectionStats['connection_stats']> | null>(null)
+  const debouncedAnomalyUpdate = useDebounce(pendingAnomalyUpdate, 100)
+  const debouncedConnectionUpdate = useDebounce(pendingConnectionUpdate, 100)
 
-  const fetchSystemData = async () => {
+  const fetchSystemData = useCallback(async () => {
+    const errors: typeof fetchErrors = {}
+    let hasSuccess = false
+    
     try {
-      setError(null)
-      const [system, anomalies, connections] = await Promise.all([
-        flaskApi.getSystemInfo(),
-        flaskApi.getAnomalyStats({ hours: 24 }),
-        flaskApi.getConnectionStats({ hours: 24 })
-      ])
+      // Fetch each endpoint independently to allow partial failures
+      try {
+        const system = await flaskApi.getSystemInfo()
+        setSystemInfo(system)
+        setFetchErrors(prev => ({ ...prev, system: undefined }))
+        hasSuccess = true
+      } catch (err) {
+        console.error('Error fetching system info:', err)
+        const errorMsg = err instanceof Error && err.message.includes('Network error') 
+          ? 'Backend disconnected' 
+          : 'Failed to fetch system info'
+        errors.system = errorMsg
+        setFetchErrors(prev => ({ ...prev, system: errorMsg }))
+      }
+
+      try {
+        const anomalies = await flaskApi.getAnomalyStats({ hours: 24 })
+        setAnomalyStats(anomalies)
+        setFetchErrors(prev => ({ ...prev, anomalies: undefined }))
+        hasSuccess = true
+      } catch (err) {
+        console.error('Error fetching anomaly stats:', err)
+        const errorMsg = err instanceof Error && err.message.includes('Network error')
+          ? 'Backend disconnected'
+          : 'Failed to fetch anomaly stats'
+        errors.anomalies = errorMsg
+        setFetchErrors(prev => ({ ...prev, anomalies: errorMsg }))
+      }
+
+      try {
+        const connections = await flaskApi.getConnectionStats({ hours: 24 })
+        setConnectionStats(connections)
+        setFetchErrors(prev => ({ ...prev, connections: undefined }))
+        hasSuccess = true
+      } catch (err) {
+        console.error('Error fetching connection stats:', err)
+        const errorMsg = err instanceof Error && err.message.includes('Network error')
+          ? 'Backend disconnected'
+          : 'Failed to fetch connection stats'
+        errors.connections = errorMsg
+        setFetchErrors(prev => ({ ...prev, connections: errorMsg }))
+      }
+
+      // Only show error if backend is disconnected AND all requests failed
+      if (!hasSuccess && !isConnected && !isConnecting) {
+        setError('Failed to fetch system information. Please ensure the backend is running.')
+      } else {
+        setError(null)
+      }
       
-      setSystemInfo(system)
-      setAnomalyStats(anomalies)
-      setConnectionStats(connections)
+      setFetchErrors(errors)
     } catch (err) {
-      console.error('Error fetching system data:', err)
-      setError('Failed to fetch system information')
+      console.error('Unexpected error fetching system data:', err)
+      // Only set error if backend is definitely disconnected
+      if (!isConnected && !isConnecting && !hasSuccess) {
+        setError('Failed to fetch system information')
+      }
     } finally {
       setLoading(false)
     }
-  }
+  }, [isConnected, isConnecting])
 
+  // Initial fetch
   useEffect(() => {
     fetchSystemData()
-    
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchSystemData, 30000)
-    return () => clearInterval(interval)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount
+
+  // Clear error when WebSocket connects
+  useEffect(() => {
+    if (isConnected && error) {
+      setError(null)
+    }
+  }, [isConnected, error])
+
+  // Apply debounced anomaly stats updates
+  useEffect(() => {
+    if (debouncedAnomalyUpdate && anomalyStats) {
+      setAnomalyStats(prev => prev ? {
+        ...prev,
+        anomaly_stats: {
+          ...prev.anomaly_stats,
+          ...debouncedAnomalyUpdate
+        }
+      } : null)
+      setPendingAnomalyUpdate(null)
+    }
+  }, [debouncedAnomalyUpdate, anomalyStats])
+
+  // Apply debounced connection stats updates
+  useEffect(() => {
+    if (debouncedConnectionUpdate && connectionStats) {
+      setConnectionStats(prev => prev ? {
+        ...prev,
+        connection_stats: {
+          ...prev.connection_stats,
+          ...debouncedConnectionUpdate
+        }
+      } : null)
+      setPendingConnectionUpdate(null)
+    }
+  }, [debouncedConnectionUpdate, connectionStats])
+
+  // Real-time WebSocket updates (with debouncing)
+  useEffect(() => {
+    if (!isConnected) {
+      // Only use polling as true fallback when WebSocket is disconnected
+      const fallbackInterval = setInterval(() => {
+        fetchSystemData()
+      }, 10000)
+      return () => clearInterval(fallbackInterval)
+    }
+
+    const handleSystemUpdate = (data: any) => {
+      const updateData = data.data || data
+      
+      // Queue anomaly stats update (will be debounced)
+      if (updateData.anomaly_stats) {
+        setPendingAnomalyUpdate(updateData.anomaly_stats)
+      }
+      
+      // Queue connection stats update (will be debounced)
+      if (updateData.connection_stats) {
+        setPendingConnectionUpdate(updateData.connection_stats)
+      }
+    }
+
+    const handleTrafficUpdate = (data: any) => {
+      const trafficData = data.data || data
+      
+      // Queue connection stats update from traffic updates (will be debounced)
+      if (trafficData.active_connections !== undefined) {
+        setPendingConnectionUpdate({ active_connections: trafficData.active_connections })
+      }
+    }
+
+    on('system_update', handleSystemUpdate)
+    on('traffic_update', handleTrafficUpdate)
+    on('stats_update', handleSystemUpdate)
+
+    return () => {
+      off('system_update', handleSystemUpdate)
+      off('traffic_update', handleTrafficUpdate)
+      off('stats_update', handleSystemUpdate)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected]) // on/off are stable from context
 
   if (loading) {
     return (
@@ -103,7 +244,8 @@ export default function SystemMonitor() {
     )
   }
 
-  if (error) {
+  // Only show error if backend is disconnected and we have no data at all
+  if (error && !isConnected && !isConnecting && !systemInfo && !anomalyStats && !connectionStats) {
     return (
       <Card className="bg-card border-border">
         <CardContent className="p-6">
@@ -248,3 +390,5 @@ export default function SystemMonitor() {
     </div>
   )
 }
+
+export default memo(SystemMonitor)

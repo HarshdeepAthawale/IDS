@@ -1,0 +1,37 @@
+╔══════════════════════════════════════════════════════════════╗
+║        PREPROCESSING STOPPED - RESUME INFORMATION           ║
+╚══════════════════════════════════════════════════════════════╝
+
+Status: STOPPED (Storage full - waiting for more storage)
+
+Progress Before Stopping:
+  • Samples Processed: 693,000 / ~8,034,453 (8.6%)
+  • Output File Size: 1.7 GB
+  • Output File: data/cicids2018_preprocessed.json
+  • Status: INCOMPLETE (needs fixing before resume)
+
+Files Processed:
+  • Check preprocessing.log for details
+  • Currently processing: Friday-23-02-2018_TrafficForML_CICFlowMeter.csv
+
+Next Steps When Ready:
+
+1. Add more storage to your system
+
+2. Fix the incomplete JSON file:
+   python scripts/fix_incomplete_json.py
+
+3. Resume preprocessing:
+   See RESUME_PREPROCESSING.md for detailed instructions
+
+Quick Resume Command:
+   cd backend
+   source venv/bin/activate
+   python scripts/preprocess_cicids2018.py \
+       --input-dir ./data/cicids2018 \
+       --output-file ./data/cicids2018_preprocessed.json \
+       --chunk-size 10000
+
+Note: The JSON file is incomplete and needs to be fixed before
+      resuming. Use fix_incomplete_json.py script.
+

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Activity, Database, Zap, Clock, TrendingUp, RefreshCw } from "lucide-react"
 import { frontendCache } from "@/lib/cache"
 import { config } from "@/lib/config"
+import { getAverageResponseTime, getResponseTimeStats } from "@/lib/flask-api"
 
 interface PerformanceMetrics {
   cacheHitRate: number
@@ -30,12 +31,13 @@ export default function PerformanceMonitor() {
 
   const updateMetrics = () => {
     const cacheStats = frontendCache.getStats()
+    const responseTimeStats = getResponseTimeStats()
     const now = new Date()
     
     setMetrics({
       cacheHitRate: cacheStats.valid > 0 ? (cacheStats.valid / cacheStats.total) * 100 : 0,
       totalRequests: cacheStats.total,
-      avgResponseTime: 150, // Simulated - would be tracked in real implementation
+      avgResponseTime: responseTimeStats.avg > 0 ? responseTimeStats.avg : 0, // Real response time from API calls
       memoryUsage: cacheStats.memoryUsage,
       pollingInterval: Math.max(config.polling.dashboard, 20000),
       lastUpdate: now.toISOString()

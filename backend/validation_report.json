@@ -1,0 +1,14 @@
+{
+  "valid": false,
+  "total_samples": 0,
+  "benign_count": 0,
+  "malicious_count": 0,
+  "feature_count": 0,
+  "files_seen": [],
+  "error_count": 1,
+  "warning_count": 0,
+  "errors": [
+    "Error reading file: "
+  ],
+  "warnings": []
+}

@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    container_name: ids-backend
+    ports:
+      - "3002:3002"
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///ids.db}
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb:27017/}
+      - MONGODB_DATABASE_NAME=${MONGODB_DATABASE_NAME:-ids_db}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+    volumes:
+      - ./backend:/app/backend
+      - ./backend/.env:/app/backend/.env:ro
+      - ids-data:/app/backend/data
+    networks:
+      - ids-network
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend
+    container_name: ids-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_FLASK_API_URL=http://backend:3002
+      - NODE_ENV=production
+    networks:
+      - ids-network
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  mongodb:
+    image: mongo:7.0
+    container_name: ids-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - ids-network
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_DATABASE=ids_db
+
+volumes:
+  ids-data:
+  mongodb-data:
+
+networks:
+  ids-network:
+    driver: bridge

@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { AlertCircle, Upload, FileText, Network, Activity, RefreshCw, Download, CheckCircle, XCircle } from "lucide-react"
+import { AlertCircle, Upload, FileText, Network, RefreshCw, Download, CheckCircle } from "lucide-react"
 import { flaskApi } from "@/lib/flask-api"
 import { format } from "date-fns"
 
@@ -42,16 +42,7 @@ interface FlowAnalysisResult {
   patterns: string[]
 }
 
-interface ModelInfo {
-  model_name: string
-  version: string
-  accuracy: number
-  last_trained: string
-  features: string[]
-}
-
 export default function AnalysisPage() {
-  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([])
   const [flowResults, setFlowResults] = useState<FlowAnalysisResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -65,16 +56,6 @@ export default function AnalysisPage() {
   // Flow Analysis State
   const [flowDuration, setFlowDuration] = useState("300") // 5 minutes default
   const [flowThreshold, setFlowThreshold] = useState("0.7")
-
-  const fetchModelInfo = async () => {
-    try {
-      const response = await flaskApi.getModelInfo()
-      setModelInfo(response)
-    } catch (err) {
-      console.error('Error fetching model info:', err)
-      setError('Failed to fetch model information')
-    }
-  }
 
   const handleBulkAnalysis = async () => {
     if (!bulkPackets.trim()) {
@@ -122,37 +103,9 @@ export default function AnalysisPage() {
       setAnalysisResults(transformedResults)
     } catch (err) {
       console.error('Error analyzing bulk packets:', err)
-      setError('Failed to analyze packets')
-      
-      // Fallback to mock results
-      setAnalysisResults([
-        {
-          id: "bulk_1",
-          timestamp: new Date().toISOString(),
-          source_ip: "192.168.1.100",
-          dest_ip: "10.0.0.50",
-          protocol: "TCP",
-          packet_size: 1024,
-          threat_level: "high",
-          threat_type: "SQL Injection",
-          description: "Detected SQL injection attempt in packet payload",
-          confidence: 0.89,
-          recommendations: ["Block source IP", "Review application logs", "Update WAF rules"]
-        },
-        {
-          id: "bulk_2",
-          timestamp: new Date().toISOString(),
-          source_ip: "203.0.113.42",
-          dest_ip: "10.0.0.100",
-          protocol: "HTTP",
-          packet_size: 2048,
-          threat_level: "medium",
-          threat_type: "XSS Attempt",
-          description: "Potential cross-site scripting attack detected",
-          confidence: 0.72,
-          recommendations: ["Sanitize input", "Review web application security"]
-        }
-      ])
+      const errorMessage = err instanceof Error ? err.message : 'Failed to analyze packets'
+      setError(`Failed to analyze packets. Backend service is required. ${errorMessage}`)
+      setAnalysisResults([]) // Empty, no mock data
     } finally {
       setLoading(false)
       setTimeout(() => setProgress(0), 1000)
@@ -198,39 +151,9 @@ export default function AnalysisPage() {
       setFlowResults(transformedResults)
     } catch (err) {
       console.error('Error analyzing flows:', err)
-      setError('Failed to analyze network flows')
-      
-      // Fallback to mock results
-      setFlowResults([
-        {
-          flow_id: "flow_001",
-          start_time: new Date(Date.now() - 300000).toISOString(),
-          end_time: new Date().toISOString(),
-          source_ip: "192.168.1.105",
-          dest_ip: "10.0.0.50",
-          protocol: "TCP",
-          total_packets: 1250,
-          total_bytes: 2048576,
-          duration: 300,
-          threat_score: 0.85,
-          anomalies: ["Unusual data transfer pattern", "High packet frequency"],
-          patterns: ["Data exfiltration", "Off-hours activity"]
-        },
-        {
-          flow_id: "flow_002",
-          start_time: new Date(Date.now() - 180000).toISOString(),
-          end_time: new Date().toISOString(),
-          source_ip: "203.0.113.42",
-          dest_ip: "10.0.0.100",
-          protocol: "HTTP",
-          total_packets: 45,
-          total_bytes: 102400,
-          duration: 180,
-          threat_score: 0.65,
-          anomalies: ["Suspicious user agent"],
-          patterns: ["Web scanning", "Automated requests"]
-        }
-      ])
+      const errorMessage = err instanceof Error ? err.message : 'Failed to analyze network flows'
+      setError(`Failed to analyze network flows. Backend service is required. ${errorMessage}`)
+      setFlowResults([]) // Empty, no mock data
     } finally {
       setLoading(false)
       setTimeout(() => setProgress(0), 1000)
@@ -266,10 +189,6 @@ export default function AnalysisPage() {
     window.URL.revokeObjectURL(url)
   }
 
-  useEffect(() => {
-    fetchModelInfo()
-  }, [])
-
   return (
     <Layout>
       <div className="space-y-6">
@@ -295,47 +214,6 @@ export default function AnalysisPage() {
           </div>
         </div>
 
-        {/* Model Information */}
-        {modelInfo && (
-          <Card className="bg-card border-border">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="h-5 w-5 text-blue-500" />
-                ML Model Information
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="space-y-2">
-                  <span className="text-sm text-muted-foreground">Model Name</span>
-                  <Badge variant="outline">{modelInfo.model_name}</Badge>
-                </div>
-                <div className="space-y-2">
-                  <span className="text-sm text-muted-foreground">Version</span>
-                  <Badge variant="outline">{modelInfo.version}</Badge>
-                </div>
-                <div className="space-y-2">
-                  <span className="text-sm text-muted-foreground">Accuracy</span>
-                  <Badge variant="outline">{(modelInfo.accuracy * 100).toFixed(1)}%</Badge>
-                </div>
-                <div className="space-y-2">
-                  <span className="text-sm text-muted-foreground">Last Trained</span>
-                  <Badge variant="outline">{format(new Date(modelInfo.last_trained), 'MMM dd, yyyy')}</Badge>
-                </div>
-              </div>
-              <div className="mt-4">
-                <span className="text-sm text-muted-foreground">Features:</span>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {modelInfo.features.map(feature => (
-                    <Badge key={feature} variant="secondary" className="text-xs">
-                      {feature}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
 
         {/* Analysis Tabs */}
         <Tabs defaultValue="bulk" className="space-y-4">

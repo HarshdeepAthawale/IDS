@@ -1,0 +1,10 @@
+{
+  "last_file": "cicids2018_subset_50k.csv",
+  "files_completed": [
+    "cicids2018_subset_50k.csv"
+  ],
+  "total_samples": 50000,
+  "total_benign": 30000,
+  "total_malicious": 20000,
+  "last_update": "2026-01-20T19:42:56.168805"
+}

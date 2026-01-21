@@ -6,8 +6,13 @@ Provides endpoints for retrieving and managing security alerts
 import logging
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
-from models.db_models import Alert, db
+from models.db_models import alerts_collection, alert_to_dict, to_object_id
 from services.logger import DatabaseLogger
+from utils.validators import (
+    validate_alert_ids, validate_pagination_params, validate_iso_date,
+    validate_severity, validate_alert_type, sanitize_string,
+    validate_ip_address, create_validation_error
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +87,25 @@ def get_alerts():
     }
     """
     try:
-        # Parse query parameters
+        # Parse and validate query parameters
         alert_type = request.args.get('type')
+        if alert_type and not validate_alert_type(alert_type):
+            return create_validation_error(f"Invalid alert type: {alert_type}. Must be 'signature', 'anomaly', or 'classification'")
+        
         severity = request.args.get('severity')
+        if severity and not validate_severity(severity):
+            return create_validation_error(f"Invalid severity: {severity}. Must be 'low', 'medium', 'high', or 'critical'")
+        
         resolved = request.args.get('resolved')
-        source_ip = request.args.get('source_ip')
-        limit = min(int(request.args.get('limit', 100)), 1000)  # Max 1000 alerts
+        source_ip = sanitize_string(request.args.get('source_ip'), max_length=45)  # Max IPv6 length
+        if source_ip and not validate_ip_address(source_ip):
+            return create_validation_error(f"Invalid source IP address: {source_ip}")
+        # Validate pagination limit
+        limit_param = request.args.get('limit', '100')
+        valid_limit, limit_int, limit_error = validate_pagination_params(limit_param, max_limit=1000)
+        if not valid_limit:
+            return create_validation_error(limit_error or "Invalid limit parameter")
+        limit = limit_int
         
         # Parse date filters
         start_date = request.args.get('start_date')
@@ -126,8 +144,8 @@ def get_alerts():
         # Get summary statistics
         summary = logger_service.get_alert_summary()
         
-        # Convert alerts to dictionaries
-        alerts_data = [alert.to_dict() for alert in alerts]
+        # Convert alerts to dictionaries (already dicts, but ensure _id is converted)
+        alerts_data = [alert_to_dict(alert) for alert in alerts]
         
         response = {
             'alerts': alerts_data,
@@ -194,10 +212,20 @@ def get_alert_history():
         if (end_date - start_date).days > 90:  # Max 90 days
             return jsonify({'error': 'Date range cannot exceed 90 days'}), 400
         
-        # Parse optional filters
+        # Parse and validate optional filters
         alert_type = request.args.get('type')
+        if alert_type and not validate_alert_type(alert_type):
+            return create_validation_error(f"Invalid alert type: {alert_type}")
+        
         severity = request.args.get('severity')
-        limit = min(int(request.args.get('limit', 1000)), 5000)  # Max 5000 for history
+        if severity and not validate_severity(severity):
+            return create_validation_error(f"Invalid severity: {severity}")
+        # Validate pagination limit
+        limit_param = request.args.get('limit', '1000')
+        valid_limit, limit_int, limit_error = validate_pagination_params(limit_param, max_limit=5000)
+        if not valid_limit:
+            return create_validation_error(limit_error or "Invalid limit parameter")
+        limit = limit_int
         
         # Build filters
         filters = {
@@ -213,7 +241,7 @@ def get_alert_history():
         alerts = logger_service.get_recent_alerts(limit=limit, **filters)
         
         # Calculate statistics
-        alerts_data = [alert.to_dict() for alert in alerts]
+        alerts_data = [alert_to_dict(alert) for alert in alerts]
         days_in_range = (end_date - start_date).days + 1
         alerts_per_day = len(alerts_data) / days_in_range if days_in_range > 0 else 0
         
@@ -245,13 +273,13 @@ def get_alert_history():
         logger.error(f"Error getting alert history: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@alerts_bp.route('/api/alerts/<int:alert_id>', methods=['PATCH'])
+@alerts_bp.route('/api/alerts/<alert_id>', methods=['PATCH'])
 def update_alert(alert_id):
     """
     Update alert (mark as resolved/unresolved)
     
     Path Parameters:
-    - alert_id: Alert ID to update
+    - alert_id: Alert ID to update (MongoDB ObjectId as string)
     
     Request Body:
     {
@@ -265,7 +293,7 @@ def update_alert(alert_id):
     Example Response:
     {
         "alert": {
-            "id": 1,
+            "id": "507f1f77bcf86cd799439011",
             "resolved": true,
             "resolved_at": "2024-01-15T11:00:00Z",
             "resolved_by": "admin_user",
@@ -279,42 +307,57 @@ def update_alert(alert_id):
         if not data:
             return jsonify({'error': 'Request body is required'}), 400
         
+        # Convert string ID to ObjectId
+        obj_id = to_object_id(alert_id)
+        if not obj_id:
+            return jsonify({'error': 'Invalid alert ID format'}), 400
+        
         # Get alert
-        alert = Alert.query.get(alert_id)
+        alert = alerts_collection.find_one({'_id': obj_id})
         if not alert:
             return jsonify({'error': 'Alert not found'}), 404
         
-        # Update fields
+        # Build update document
+        update_doc = {}
         if 'resolved' in data:
-            alert.resolved = bool(data['resolved'])
-            if alert.resolved:
-                alert.resolved_at = datetime.utcnow()
-                alert.resolved_by = data.get('resolved_by')
+            resolved = bool(data['resolved'])
+            update_doc['resolved'] = resolved
+            if resolved:
+                update_doc['resolved_at'] = datetime.utcnow()
+                update_doc['resolved_by'] = data.get('resolved_by')
             else:
-                alert.resolved_at = None
-                alert.resolved_by = None
+                update_doc['resolved_at'] = None
+                update_doc['resolved_by'] = None
         
-        db.session.commit()
+        # Update alert
+        alerts_collection.update_one(
+            {'_id': obj_id},
+            {'$set': update_doc}
+        )
         
-        logger.info(f"Updated alert {alert_id}: resolved={alert.resolved}")
+        # Get updated alert
+        updated_alert = alerts_collection.find_one({'_id': obj_id})
+        
+        logger.info(f"Updated alert {alert_id}: resolved={update_doc.get('resolved', False)}")
         
         return jsonify({
-            'alert': alert.to_dict(),
-            'message': f"Alert {'resolved' if alert.resolved else 'unresolved'} successfully"
+            'alert': alert_to_dict(updated_alert),
+            'message': f"Alert {'resolved' if update_doc.get('resolved', False) else 'unresolved'} successfully"
         })
         
     except Exception as e:
         logger.error(f"Error updating alert: {e}")
-        db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
 
-@alerts_bp.route('/api/alerts/<int:alert_id>', methods=['DELETE'])
+@alerts_bp.route('/api/alerts/<alert_id>', methods=['DELETE'])
 def delete_alert(alert_id):
     """
     Delete alert (admin only)
     
+    Rate limited: 10 per minute per IP
+    
     Path Parameters:
-    - alert_id: Alert ID to delete
+    - alert_id: Alert ID to delete (MongoDB ObjectId as string)
     
     Returns:
     JSON response with deletion confirmation
@@ -322,18 +365,22 @@ def delete_alert(alert_id):
     Example Response:
     {
         "message": "Alert deleted successfully",
-        "alert_id": 1
+        "alert_id": "507f1f77bcf86cd799439011"
     }
     """
     try:
-        # Get alert
-        alert = Alert.query.get(alert_id)
+        # Convert string ID to ObjectId
+        obj_id = to_object_id(alert_id)
+        if not obj_id:
+            return jsonify({'error': 'Invalid alert ID format'}), 400
+        
+        # Check if alert exists
+        alert = alerts_collection.find_one({'_id': obj_id})
         if not alert:
             return jsonify({'error': 'Alert not found'}), 404
         
         # Delete alert
-        db.session.delete(alert)
-        db.session.commit()
+        alerts_collection.delete_one({'_id': obj_id})
         
         logger.info(f"Deleted alert {alert_id}")
         
@@ -344,7 +391,6 @@ def delete_alert(alert_id):
         
     except Exception as e:
         logger.error(f"Error deleting alert: {e}")
-        db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
 
 @alerts_bp.route('/api/alerts/summary', methods=['GET'])
@@ -377,6 +423,125 @@ def get_alert_summary():
         
     except Exception as e:
         logger.error(f"Error getting alert summary: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@alerts_bp.route('/api/alerts/critical', methods=['GET'])
+def get_critical_alerts():
+    """
+    Get count of critical severity alerts
+    
+    Returns:
+    JSON response with critical alerts count
+    
+    Example Response:
+    {
+        "count": 5,
+        "alerts": [
+            {
+                "id": "507f1f77bcf86cd799439011",
+                "severity": "critical",
+                "type": "malware_communication",
+                "description": "Potential malware communication detected",
+                "timestamp": "2024-01-15T10:30:00Z",
+                "source_ip": "192.168.1.100",
+                "dest_ip": "10.0.0.1"
+            }
+        ],
+        "unresolved_count": 4
+    }
+    """
+    try:
+        # Get unresolved critical alerts
+        filters = {
+            'severity': 'critical',
+            'resolved': False
+        }
+        
+        # Get alerts from logger service
+        alerts = logger_service.get_recent_alerts(limit=100, **filters)
+        alerts_data = [alert_to_dict(alert) for alert in alerts]
+        
+        # Get total count including resolved
+        all_critical = logger_service.get_recent_alerts(limit=1000, severity='critical')
+        total_count = len(all_critical)
+        
+        response = {
+            'count': total_count,
+            'unresolved_count': len(alerts_data),
+            'alerts': alerts_data[:10]  # Return first 10 for preview
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error getting critical alerts: {e}")
+        return jsonify({'error': 'Internal server error', 'count': 0, 'unresolved_count': 0}), 500
+
+@alerts_bp.route('/api/alerts/bulk-delete', methods=['POST'])
+def bulk_delete_alerts():
+    """
+    Bulk delete multiple alerts
+    
+    Rate limited: 5 per minute per IP
+    
+    Request Body:
+    {
+        "alert_ids": ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+    }
+    
+    Returns:
+    JSON response with bulk deletion results
+    
+    Example Response:
+    {
+        "deleted_count": 2,
+        "failed_count": 0,
+        "failed_alerts": [],
+        "message": "Deleted 2 alerts successfully"
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return create_validation_error('Request body is required')
+        
+        alert_ids_raw = data.get('alert_ids', [])
+        valid_ids, alert_ids, ids_error = validate_alert_ids(alert_ids_raw)
+        if not valid_ids:
+            return create_validation_error(ids_error or 'Invalid alert_ids')
+        
+        deleted_count = 0
+        failed_alerts = []
+        
+        for alert_id in alert_ids:
+            try:
+                obj_id = to_object_id(alert_id)
+                if not obj_id:
+                    failed_alerts.append(alert_id)
+                    continue
+                
+                # Check if alert exists
+                alert = alerts_collection.find_one({'_id': obj_id})
+                if alert:
+                    alerts_collection.delete_one({'_id': obj_id})
+                    deleted_count += 1
+                else:
+                    failed_alerts.append(alert_id)
+            except Exception as e:
+                logger.error(f"Error deleting alert {alert_id}: {e}")
+                failed_alerts.append(alert_id)
+        
+        logger.info(f"Bulk deleted {deleted_count} alerts")
+        
+        return jsonify({
+            'deleted_count': deleted_count,
+            'failed_count': len(failed_alerts),
+            'failed_alerts': failed_alerts,
+            'message': f"Deleted {deleted_count} out of {len(alert_ids)} alerts successfully"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in bulk delete: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
 @alerts_bp.route('/api/alerts/bulk-resolve', methods=['POST'])
@@ -419,23 +584,31 @@ def bulk_resolve_alerts():
         
         for alert_id in alert_ids:
             try:
-                alert = Alert.query.get(alert_id)
+                obj_id = to_object_id(alert_id)
+                if not obj_id:
+                    failed_alerts.append(alert_id)
+                    continue
+                
+                alert = alerts_collection.find_one({'_id': obj_id})
                 if alert:
-                    alert.resolved = resolved
+                    update_doc = {'resolved': resolved}
                     if resolved:
-                        alert.resolved_at = datetime.utcnow()
-                        alert.resolved_by = resolved_by
+                        update_doc['resolved_at'] = datetime.utcnow()
+                        update_doc['resolved_by'] = resolved_by
                     else:
-                        alert.resolved_at = None
-                        alert.resolved_by = None
+                        update_doc['resolved_at'] = None
+                        update_doc['resolved_by'] = None
+                    
+                    alerts_collection.update_one(
+                        {'_id': obj_id},
+                        {'$set': update_doc}
+                    )
                     resolved_count += 1
                 else:
                     failed_alerts.append(alert_id)
             except Exception as e:
                 logger.error(f"Error resolving alert {alert_id}: {e}")
                 failed_alerts.append(alert_id)
-        
-        db.session.commit()
         
         logger.info(f"Bulk resolved {resolved_count} alerts")
         
@@ -448,5 +621,4 @@ def bulk_resolve_alerts():
         
     except Exception as e:
         logger.error(f"Error in bulk resolve: {e}")
-        db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500

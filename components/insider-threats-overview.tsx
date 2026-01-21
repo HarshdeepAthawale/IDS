@@ -1,12 +1,12 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, memo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, RefreshCw, ExternalLink } from "lucide-react"
 import { flaskApi } from "@/lib/flask-api"
-import { config } from "@/lib/config"
 import Link from "next/link"
+import { useWebSocket } from "@/hooks/use-websocket"
 
 interface InsiderThreat {
   id: string
@@ -18,12 +18,15 @@ interface InsiderThreat {
   description?: string
 }
 
-export default function InsiderThreatsOverview() {
+function InsiderThreatsOverview() {
   const [threats, setThreats] = useState<InsiderThreat[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  
+  // Real-time WebSocket connection
+  const { isConnected, on, off } = useWebSocket({ room: 'dashboard' })
 
-  const fetchInsiderThreatsData = async () => {
+  const fetchInsiderThreatsData = useCallback(async () => {
     try {
       setError(null)
       const response = await flaskApi.getInsiderThreats()
@@ -46,17 +49,52 @@ export default function InsiderThreatsOverview() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
+  // Initial fetch
   useEffect(() => {
     fetchInsiderThreatsData()
-    
-    // Set up polling if enabled
-    if (config.features.polling) {
-      const interval = setInterval(fetchInsiderThreatsData, config.polling.dashboard)
-      return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount
+
+  // Real-time WebSocket updates
+  useEffect(() => {
+    if (!isConnected) {
+      // Only use polling as true fallback when WebSocket is disconnected
+      const fallbackInterval = setInterval(() => {
+        fetchInsiderThreatsData()
+      }, 5000)
+      return () => clearInterval(fallbackInterval)
     }
-  }, [])
+
+    const handleInsiderActivity = (data: any) => {
+      const activityData = data.data || data
+      const newThreat: InsiderThreat = {
+        id: activityData.id?.toString() || Date.now().toString(),
+        timestamp: activityData.timestamp || new Date().toISOString(),
+        user: activityData.username || activityData.user || 'Unknown',
+        userId: activityData.user_id?.toString() || 'unknown',
+        activity: activityData.activity_type || activityData.activity || 'Unknown',
+        riskLevel: activityData.severity || activityData.risk_level || 'medium',
+        description: activityData.description
+      }
+      
+      setThreats(prev => {
+        const exists = prev.find(t => t.id === newThreat.id)
+        if (exists) return prev
+        return [newThreat, ...prev.slice(0, 9)] // Keep last 10
+      })
+    }
+
+    on('insider_activity', handleInsiderActivity)
+    on('new_insider_threat', handleInsiderActivity)
+
+    return () => {
+      off('insider_activity', handleInsiderActivity)
+      off('new_insider_threat', handleInsiderActivity)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected]) // on/off are stable from context
 
   const getRiskColor = (level: string) => {
     switch (level) {
@@ -117,3 +155,5 @@ export default function InsiderThreatsOverview() {
     </Card>
   )
 }
+
+export default memo(InsiderThreatsOverview)
