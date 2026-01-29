@@ -15,16 +15,17 @@ export async function GET(request: Request) {
     ])
     
     // Transform Flask responses to frontend format
-    const trafficData = transformers.trafficStatsToFrontend(trafficResponse.historical_data)
+    const trafficData = transformers.trafficStatsToFrontend(trafficResponse.historical_data ?? [])
     const protocolData = protocolResponse.protocol_distribution 
       ? transformers.protocolStatsToFrontend(protocolResponse.protocol_distribution)
       : []
     
+    const traffic = trafficResponse as { current_stats?: unknown; historical_data?: unknown[]; summary?: unknown }
     return Response.json({ 
       trafficData, 
       protocolData,
-      summary: trafficResponse.summary,
-      current: trafficResponse.current_stats
+      summary: traffic.summary,
+      current: traffic.current_stats
     })
   } catch (error) {
     console.error("Error fetching traffic stats:", error)

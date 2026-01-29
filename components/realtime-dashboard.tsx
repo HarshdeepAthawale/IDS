@@ -36,7 +36,7 @@ export default function RealtimeDashboard() {
   const [error, setError] = useState<string | null>(null)
   
   const socketRef = useRef<Socket | null>(null)
-  const handleRealtimeDataRef = useRef<(data: any) => void>()
+  const handleRealtimeDataRef = useRef<((data: unknown) => void) | undefined>(undefined)
   const maxDataPoints = 50
 
   // Store handleRealtimeData in ref to always have latest version

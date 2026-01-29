@@ -287,7 +287,7 @@ function TrafficStatsOverview() {
           if (typeof value === 'number') {
             return sum + value
           } else if (typeof value === 'object' && value !== null && 'total_packets' in value) {
-            return sum + (value.total_packets || 0)
+            return sum + (Number((value as { total_packets?: number }).total_packets) || 0)
           }
           return sum
         }, 0)
@@ -305,11 +305,12 @@ function TrafficStatsOverview() {
               numericValue = total > 0 ? Math.round((value / total) * 100 * 100) / 100 : 0
             } else if (typeof value === 'object' && value !== null) {
               // API format: object with percentage field
-              packetCount = value.total_packets || 0
-              if ('percentage' in value) {
-                numericValue = value.percentage
-              } else if ('total_packets' in value && total > 0) {
-                numericValue = Math.round((value.total_packets / total) * 100 * 100) / 100
+              const obj = value as { total_packets?: number; percentage?: number }
+              packetCount = obj.total_packets ?? 0
+              if ('percentage' in obj && obj.percentage != null) {
+                numericValue = obj.percentage
+              } else if (obj.total_packets != null && total > 0) {
+                numericValue = Math.round((obj.total_packets / total) * 100 * 100) / 100
               }
             }
             
@@ -459,10 +460,11 @@ function TrafficStatsOverview() {
                       cx="50%"
                       cy="50%"
                       labelLine={false}
-                      label={({ name, value }) => {
-                        // Show label for all slices
-                        if (value > 0) {
-                          return `${name}\n${value.toFixed(1)}%`
+                      label={(props: Record<string, unknown>) => {
+                        const name = String(props.name ?? '')
+                        const num = Number(props.value ?? 0)
+                        if (num > 0) {
+                          return `${name}\n${num.toFixed(1)}%`
                         }
                         return ''
                       }}
@@ -473,11 +475,6 @@ function TrafficStatsOverview() {
                       isAnimationActive={true}
                       animationDuration={500}
                       animationEasing="ease-out"
-                      activeShape={{ 
-                        outerRadius: 110, 
-                        stroke: "#fff",
-                        strokeWidth: 2
-                      }}
                     >
                       {pieData.map((entry, index) => (
                         <Cell 

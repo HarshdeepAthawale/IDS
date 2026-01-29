@@ -7,7 +7,7 @@ export async function GET(request: Request) {
     // Get query parameters
     const { searchParams } = new URL(request.url)
     const hours = parseInt(searchParams.get('hours') || '24')
-    const severity = searchParams.get('severity')
+    const severity = searchParams.get('severity') ?? undefined
     
     // Fetch from Flask backend
     const flaskResponse = await flaskApi.getAnomalyStats({ hours, severity })

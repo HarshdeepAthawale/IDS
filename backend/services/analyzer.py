@@ -495,12 +495,13 @@ class PacketAnalyzer:
         
         logger.info("PacketAnalyzer initialized")
     
-    def analyze_packet(self, packet_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def analyze_packet(self, packet_data: Dict[str, Any], skip_classification: bool = False) -> List[Dict[str, Any]]:
         """
         Analyze packet using signature, anomaly, and classification detection
         
         Args:
             packet_data: Parsed packet data
+            skip_classification: If True, skip classification (e.g. when caller does batch classification)
             
         Returns:
             List of detection results
@@ -529,8 +530,8 @@ class PacketAnalyzer:
             if anomaly_result:
                 detections.append(anomaly_result)
             
-            # Supervised classification detection
-            if self.classification_detector and self.feature_extractor:
+            # Supervised classification detection (skipped when caller does batch classification)
+            if not skip_classification and self.classification_detector and self.feature_extractor:
                 try:
                     # Extract features for classification
                     packet_features = self.feature_extractor.extract_features(packet_data)

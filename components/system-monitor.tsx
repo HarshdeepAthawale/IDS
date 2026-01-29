@@ -86,7 +86,7 @@ function SystemMonitor() {
       // Fetch each endpoint independently to allow partial failures
       try {
         const system = await flaskApi.getSystemInfo()
-        setSystemInfo(system)
+        setSystemInfo(system as unknown as SystemInfo)
         setFetchErrors(prev => ({ ...prev, system: undefined }))
         hasSuccess = true
       } catch (err) {
@@ -100,7 +100,7 @@ function SystemMonitor() {
 
       try {
         const anomalies = await flaskApi.getAnomalyStats({ hours: 24 })
-        setAnomalyStats(anomalies)
+        setAnomalyStats(anomalies as unknown as AnomalyStats)
         setFetchErrors(prev => ({ ...prev, anomalies: undefined }))
         hasSuccess = true
       } catch (err) {
@@ -114,7 +114,7 @@ function SystemMonitor() {
 
       try {
         const connections = await flaskApi.getConnectionStats({ hours: 24 })
-        setConnectionStats(connections)
+        setConnectionStats(connections as unknown as ConnectionStats)
         setFetchErrors(prev => ({ ...prev, connections: undefined }))
         hasSuccess = true
       } catch (err) {

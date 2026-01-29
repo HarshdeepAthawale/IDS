@@ -56,7 +56,7 @@ export default function TrainingDashboard() {
     try {
       setError(null)
       const stats = await flaskApi.getTrainingStatistics()
-      setStatistics(stats)
+      setStatistics(stats as unknown as TrainingStatistics)
     } catch (err: any) {
       console.error('Error fetching training statistics:', err)
       const errorMsg = err.message || 'Failed to fetch training statistics'
@@ -70,7 +70,8 @@ export default function TrainingDashboard() {
   const fetchTrainingHistory = async () => {
     try {
       const history = await flaskApi.getTrainingHistory()
-      setTrainingHistory(history.history || [])
+      const list = Array.isArray(history) ? history : (history as { history?: unknown[] }).history ?? []
+      setTrainingHistory(list as TrainingHistory[])
     } catch (err) {
       console.error('Error fetching training history:', err)
     }
@@ -83,7 +84,8 @@ export default function TrainingDashboard() {
 
     try {
       const result = await flaskApi.trainModel({ hyperparameter_tuning: hyperparameterTuning })
-      setSuccess(`Model trained successfully! Accuracy: ${(result.training_result?.test_metrics?.accuracy * 100 || 0).toFixed(2)}%`)
+      const acc = (result as { training_result?: { test_metrics?: { accuracy?: number } } }).training_result?.test_metrics?.accuracy
+      setSuccess(`Model trained successfully! Accuracy: ${((acc ?? 0) * 100).toFixed(2)}%`)
       await fetchStatistics()
       await fetchTrainingHistory()
     } catch (err: any) {

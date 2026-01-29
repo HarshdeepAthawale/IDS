@@ -12,6 +12,25 @@ import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import { useWebSocket } from "@/hooks/use-websocket"
 
+/** Raw alert shape from Flask API */
+interface ApiAlert {
+  id: number | string
+  timestamp: string
+  source_ip: string
+  dest_ip: string
+  protocol: string
+  type: "signature" | "anomaly" | "classification"
+  severity: "critical" | "high" | "medium" | "low"
+  description: string
+  resolved?: boolean
+  confidence_score?: number
+  classification_result?: {
+    label: string
+    confidence: number
+    probabilities?: { benign: number; malicious: number }
+  }
+}
+
 interface Alert {
   id: string
   timestamp: string
@@ -63,7 +82,7 @@ function AlertsOverview() {
       
       const response = await flaskApi.getAlerts(params)
       // Transform Flask alerts to include resolved status
-      const transformedAlerts = response.alerts.map(alert => ({
+      const transformedAlerts = (response.alerts as ApiAlert[]).map(alert => ({
         id: alert.id.toString(),
         timestamp: alert.timestamp,
         sourceIp: alert.source_ip,
@@ -72,7 +91,7 @@ function AlertsOverview() {
         type: alert.type,
         severity: alert.severity,
         description: alert.description,
-        resolved: alert.resolved || false,
+        resolved: alert.resolved ?? false,
         confidenceScore: alert.confidence_score,
         classificationResult: alert.classification_result
       }))
@@ -294,7 +313,11 @@ function AlertsOverview() {
                 defaultMonth={dateRange.from}
                 selected={dateRange}
                 onSelect={(range) => {
-                  setDateRange(range || { from: undefined, to: undefined })
+                  setDateRange(
+                    range
+                      ? { from: range.from, to: range.to ?? undefined }
+                      : { from: undefined, to: undefined }
+                  )
                   if (range?.from && range?.to) {
                     setShowDatePicker(false)
                     fetchAlertsData()

@@ -11,6 +11,17 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Feature names from our FeatureExtractor (used when dict has these keys instead of feature_0, feature_1, ...).
+# SecIDS-CNN expects a fixed-size input; we map these 6 values into the first 6 indices and pad the rest with 0.
+EXTRACTOR_FEATURE_ORDER = [
+    "packet_size",
+    "protocol_type",
+    "connection_duration",
+    "failed_login_attempts",
+    "data_transfer_rate",
+    "access_frequency",
+]
+
 # Backend dir = backend/services; backend root = backend/; repo root = backend's parent
 _BACKEND_DIR = Path(__file__).resolve().parent
 _BACKEND_ROOT = _BACKEND_DIR.parent
@@ -87,21 +98,33 @@ class SecIDSClassifierAdapter:
             self.is_trained = False
 
     def _features_dict_to_array(self, features: Dict[str, float]) -> np.ndarray:
-        """Build a single-sample array from features dict; pad/truncate to model input size."""
-        if self.feature_names:
+        """Build a single-sample array from features dict; pad/truncate to model input size.
+        Accepts either (1) model-style keys (feature_0, feature_1, ...) or (2) FeatureExtractor
+        keys (packet_size, protocol_type, ...). For (2), we map the 6 extractor features into
+        the first 6 indices so SecIDS-CNN receives real input instead of all zeros."""
+        n = self._n_features or 0
+        # If dict uses FeatureExtractor keys, map them into first 6 positions (rest padded with 0)
+        if any(k in features for k in EXTRACTOR_FEATURE_ORDER):
+            vals = [float(features.get(name, 0.0)) for name in EXTRACTOR_FEATURE_ORDER]
+            if n > 0:
+                vals = vals + [0.0] * (n - len(vals)) if len(vals) < n else vals[:n]
+        elif self.feature_names:
             vals = [float(features.get(name, 0.0)) for name in self.feature_names]
         else:
             keys = sorted(features.keys())
             vals = [float(features.get(k, 0.0)) for k in keys]
-        n = self._n_features or len(vals)
-        if len(vals) < n:
+            if n > 0 and len(vals) < n:
+                vals = vals + [0.0] * (n - len(vals))
+            elif n > 0 and len(vals) > n:
+                vals = vals[:n]
+        if n > 0 and len(vals) < n:
             vals = vals + [0.0] * (n - len(vals))
-        elif len(vals) > n:
+        elif n > 0 and len(vals) > n:
             vals = vals[:n]
         arr = np.array([vals], dtype=np.float32)
         if self._expects_3d and self._input_shape and len(self._input_shape) == 3:
             steps = int(self._input_shape[1]) or 1
-            f = int(self._input_shape[2]) or n
+            f = int(self._input_shape[2]) or (n or len(vals))
             arr = arr.reshape((1, steps, f))
         return arr
 
@@ -124,6 +147,15 @@ class SecIDSClassifierAdapter:
         if hasattr(out, 'numpy'):
             out = out.numpy()
         return np.asarray(out)
+
+    def predict_proba_from_dicts(self, feature_dicts: List[Dict[str, float]]) -> np.ndarray:
+        """Batch prediction from list of feature dicts; avoids per-packet inference in PCAP analysis."""
+        if not feature_dicts:
+            return np.zeros((0, 2), dtype=np.float64)
+        if not self.is_trained or self.model is None:
+            return np.tile([1.0, 0.0], (len(feature_dicts), 1))
+        X = np.vstack([self._features_dict_to_array(d) for d in feature_dicts])
+        return self.predict_proba(X)
 
     def classify(self, features: Dict[str, float]) -> Dict[str, Any]:
         """Single-sample classification; same interface as ClassificationDetector.classify."""

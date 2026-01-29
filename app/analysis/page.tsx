@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import Layout from "@/components/layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -65,6 +66,7 @@ interface PcapModelInfo {
 }
 
 interface PcapAnalysisResponse {
+  id?: string
   metadata?: {
     packets_processed?: number
     bytes_processed?: number
@@ -94,6 +96,7 @@ interface PcapAnalysisListItem {
 }
 
 function AnalysisPageContent() {
+  const router = useRouter()
   const { lastPcapResult, setLastPcapResult } = usePcapAnalysis()
   const pcapResult = lastPcapResult as PcapAnalysisResponse | null
   const [pcapFile, setPcapFile] = useState<File | null>(null)
@@ -198,11 +201,15 @@ function AnalysisPageContent() {
     try {
       const response = await flaskApi.analyzePcap({
         file: pcapFile,
-        maxPackets: 1800,
+        maxPackets: 100000,
       })
       setLastPcapResult(response)
       setPcapProgress(100)
       fetchStoredAnalyses()
+      // Redirect to stored summary so user can revisit anytime via /analysis/[id]
+      if (response?.id) {
+        router.push(`/analysis/${response.id}`)
+      }
     } catch (err) {
       console.error("Error analyzing PCAP:", err)
       let message = "Failed to analyze PCAP"
@@ -311,6 +318,11 @@ ML Models:
                         {item.filename}
                       </p>
                     )}
+                    {item.created_at && (
+                      <span className="text-xs text-muted-foreground">
+                        {format(new Date(item.created_at), "MMM d, yyyy HH:mm")}
+                      </span>
+                    )}
                     <Button asChild variant="outline" size="sm" className="ml-auto gap-2">
                       <Link href={`/analysis/${item.id}`}>
                         <ExternalLink className="h-4 w-4" />
@@ -363,7 +375,7 @@ ML Models:
                       Selected: <span className="font-medium">{pcapFile.name}</span> ({formatFileSize(pcapFile.size)})
                     </span>
                   ) : (
-                    "Max ~1800 packets processed for speed. Supports .pcap and .pcapng files (max 100MB)."
+                    "Up to 100,000 packets analyzed per request. Supports .pcap and .pcapng (max 100MB)."
                   )}
                 </p>
               </div>

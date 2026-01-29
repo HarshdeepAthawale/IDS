@@ -462,7 +462,7 @@ Examples:
     parser.add_argument('--labeled-by', type=str, default='cicids2018',
                        help='Label source identifier')
     parser.add_argument('--skip-duplicates', action='store_true',
-                       help='Skip duplicate samples (not implemented yet)')
+                       help='Reserved for future use: skip duplicate samples')
     parser.add_argument('--resume', action='store_true',
                        help='Resume import from where it stopped (skips already imported samples)')
     

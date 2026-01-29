@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     const flaskResponse = await flaskApi.getAlerts(params)
     
     // Transform Flask response to frontend format
-    const alerts = flaskResponse.alerts.map(transformers.alertToFrontend)
+    const alerts = flaskResponse.alerts.map((a) => transformers.alertToFrontend(a as Record<string, unknown>))
     
     return Response.json({
       alerts,

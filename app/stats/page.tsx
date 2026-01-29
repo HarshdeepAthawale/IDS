@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import React, { useState, useEffect, useCallback } from "react"
 import Layout from "@/components/layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { AlertCircle } from "lucide-react"
@@ -169,7 +169,7 @@ export default function StatsPage() {
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
                   <Pie
-                    data={protocolData}
+                    data={protocolData as { name: string; value: number }[] & Record<string, unknown>[]}
                     cx="50%"
                     cy="50%"
                     labelLine={false}
@@ -180,13 +180,6 @@ export default function StatsPage() {
                     isAnimationActive={true}
                     animationDuration={400}
                     animationEasing="ease-out"
-                    activeIndex={undefined}
-                    activeShape={{ 
-                      outerRadius: 90, 
-                      fill: "#3b82f6",
-                      stroke: "#fff",
-                      strokeWidth: 2
-                    }}
                   >
                     {protocolData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />

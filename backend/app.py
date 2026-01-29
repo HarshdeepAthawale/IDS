@@ -278,12 +278,17 @@ def create_app(config_name='default'):
         
         # Overall system status: when SecIDS is active and trained, report healthy even if MongoDB is down (SecIDS-only mode)
         overall_status = 'healthy'
+        secids_only_note = None
         if db_status != 'connected':
-            overall_status = 'healthy' if secids_active else 'degraded'
+            if secids_active:
+                overall_status = 'healthy'
+                secids_only_note = 'SecIDS-only mode: MongoDB unavailable; classification and PCAP analysis still operational.'
+            else:
+                overall_status = 'degraded'
         elif sniffer_status in ['degraded', 'warning']:
             overall_status = 'degraded'
         
-        return jsonify({
+        response = {
             'status': overall_status,
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'version': '1.0.0',
@@ -309,7 +314,10 @@ def create_app(config_name='default'):
                 'training_samples': analyzer_stats.get('training_samples', 0)
             },
             'recommendations': _get_health_recommendations(db_status, sniffer_status, capture_healthy, capture_warning, total_packets, has_capture_thread)
-        })
+        }
+        if secids_only_note:
+            response['note'] = secids_only_note
+        return jsonify(response)
     
     def _get_health_recommendations(db_status, sniffer_status, capture_healthy, capture_warning, total_packets, has_capture_thread):
         """Generate actionable recommendations based on health status"""

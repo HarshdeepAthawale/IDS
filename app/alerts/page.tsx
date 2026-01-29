@@ -24,6 +24,25 @@ interface PcapDetectionItem {
   ml_source?: string
 }
 
+/** Raw alert shape from Flask API */
+interface ApiAlert {
+  id: number | string
+  timestamp: string
+  source_ip: string
+  dest_ip: string
+  protocol: string
+  type: "signature" | "anomaly" | "classification"
+  severity: "critical" | "high" | "medium" | "low"
+  description: string
+  resolved?: boolean
+  confidence_score?: number
+  classification_result?: {
+    label: string
+    confidence: number
+    probabilities?: { benign: number; malicious: number }
+  }
+}
+
 interface Alert {
   id: string
   timestamp: string
@@ -129,7 +148,7 @@ export default function AlertsPage() {
       const response = await flaskApi.getAlerts(params)
       
       // Transform Flask alerts to include resolved status
-      const transformedAlerts = response.alerts.map(alert => ({
+      const transformedAlerts = (response.alerts as ApiAlert[]).map(alert => ({
         id: alert.id.toString(),
         timestamp: alert.timestamp,
         sourceIp: alert.source_ip,
@@ -138,7 +157,7 @@ export default function AlertsPage() {
         type: alert.type,
         severity: alert.severity,
         description: alert.description,
-        resolved: alert.resolved || false,
+        resolved: alert.resolved ?? false,
         confidenceScore: alert.confidence_score,
         classificationResult: alert.classification_result
       }))
@@ -246,10 +265,12 @@ export default function AlertsPage() {
     setUpdatingAlerts(prev => new Set([...prev, ...selectedAlerts]))
     try {
       // Use bulk delete endpoint
-      const alertIds = Array.from(selectedAlerts)
-      const result = await flaskApi.bulkDeleteAlerts({ alert_ids: alertIds })
-      
-      if (result.failed_count > 0) {
+      const alertIds = Array.from(selectedAlerts).map(id => parseInt(id, 10)).filter(n => !Number.isNaN(n))
+      const result = await flaskApi.bulkDeleteAlerts({ alert_ids: alertIds }) as {
+        failed_count?: number
+        failed_alerts?: unknown[]
+      }
+      if (result.failed_count != null && result.failed_count > 0) {
         console.warn(`Failed to delete ${result.failed_count} alerts:`, result.failed_alerts)
       }
       

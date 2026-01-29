@@ -118,7 +118,7 @@ export default function SummaryPage() {
         flaskApi.getAlertSummary(),
         flaskApi.getPcapStats().catch(() => ({ total_detections: 0, critical_detections: 0 })),
       ])
-      setAlertSummary(alertData)
+      setAlertSummary(alertData as unknown as AlertSummary)
       setPcapStats(stats)
     } catch (err) {
       console.error('Error fetching summary data:', err)
@@ -516,14 +516,14 @@ export default function SummaryPage() {
                               )}
                               {detection.evidence && (
                                 <div className="font-mono text-[10px] break-all">
-                                  {detection.evidence.source_ip && (
-                                    <div>Source: {String(detection.evidence.source_ip)}</div>
+                                  {(detection.evidence as Record<string, unknown>).source_ip != null && (
+                                    <div>Source: {String((detection.evidence as Record<string, unknown>).source_ip)}</div>
                                   )}
-                                  {detection.evidence.dest_ip && (
-                                    <div>Dest: {String(detection.evidence.dest_ip)}</div>
+                                  {(detection.evidence as Record<string, unknown>).dest_ip != null && (
+                                    <div>Dest: {String((detection.evidence as Record<string, unknown>).dest_ip)}</div>
                                   )}
-                                  {detection.evidence.protocol && (
-                                    <div>Protocol: {String(detection.evidence.protocol)}</div>
+                                  {(detection.evidence as Record<string, unknown>).protocol != null && (
+                                    <div>Protocol: {String((detection.evidence as Record<string, unknown>).protocol)}</div>
                                   )}
                                 </div>
                               )}

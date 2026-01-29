@@ -139,7 +139,7 @@ def analyze_pcap():
             result["metadata"]["filename"] = filename
             last_result = result
 
-            # Persist to MongoDB if available
+            # Persist to MongoDB if available (so user can revisit summary anytime)
             if pcap_analyses_collection is not None:
                 try:
                     doc = {
@@ -147,7 +147,8 @@ def analyze_pcap():
                         "filename": filename,
                         "created_at": datetime.now(timezone.utc),
                     }
-                    pcap_analyses_collection.insert_one(doc)
+                    insert_result = pcap_analyses_collection.insert_one(doc)
+                    result["id"] = str(insert_result.inserted_id)
                 except Exception as db_err:
                     logger.warning("Failed to save PCAP analysis to DB: %s", db_err)
 

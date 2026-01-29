@@ -44,3 +44,40 @@ def test_model_info_returns_200(client):
     assert r.status_code == 200
     data = r.get_json()
     assert data is not None
+
+
+def test_alerts_list_returns_200(client):
+    """GET /api/alerts returns 200 and JSON with alerts list or total."""
+    r = client.get("/api/alerts")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data is not None
+    assert "alerts" in data
+    assert isinstance(data["alerts"], list)
+    assert "total" in data
+
+
+def test_pcap_analyze_without_file_returns_400(client):
+    """POST /api/pcap/analyze without file returns 400."""
+    r = client.post("/api/pcap/analyze")
+    assert r.status_code == 400
+    data = r.get_json()
+    assert data is not None
+    assert "error" in data
+    assert "file" in data["error"].lower() or "required" in data["error"].lower()
+
+
+def test_pcap_stats_returns_200(client):
+    """GET /api/pcap/stats returns 200 and JSON."""
+    r = client.get("/api/pcap/stats")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data is not None
+
+
+def test_training_statistics_returns_200(client):
+    """GET /api/training/statistics returns 200 and JSON."""
+    r = client.get("/api/training/statistics")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data is not None

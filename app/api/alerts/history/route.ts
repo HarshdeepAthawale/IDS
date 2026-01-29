@@ -12,12 +12,13 @@ export async function GET(request: Request) {
     const flaskResponse = await flaskApi.getAlertHistory(params)
     
     // Transform Flask response to frontend format
-    const alerts = flaskResponse.alerts.map(transformers.alertToFrontend)
+    const alerts = flaskResponse.alerts.map((a) => transformers.alertToFrontend(a as Record<string, unknown>))
     
+    const res = flaskResponse as { alerts: unknown[]; total?: number; summary?: unknown }
     return Response.json({
       alerts,
-      total: flaskResponse.total,
-      summary: flaskResponse.summary
+      total: res.total,
+      summary: res.summary
     })
   } catch (error) {
     console.error("Error fetching alert history:", error)

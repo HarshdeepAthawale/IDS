@@ -64,17 +64,18 @@ export default function ClassificationMetrics() {
     try {
       const evalMetrics = await flaskApi.evaluateModel()
       // Handle different response formats
-      if (evalMetrics.metrics) {
-        setMetrics(evalMetrics.metrics)
-      } else if (evalMetrics.accuracy !== undefined) {
-        setMetrics(evalMetrics)
+      const ev = evalMetrics as unknown as { metrics?: EvaluationMetrics; accuracy?: number } & EvaluationMetrics
+      if (ev.metrics) {
+        setMetrics(ev.metrics)
+      } else if (ev.accuracy !== undefined) {
+        setMetrics(ev)
       } else {
         throw new Error('Invalid metrics format')
       }
       
       try {
         const modelInfo = await flaskApi.getModelMetrics()
-        setModelMetrics(modelInfo)
+        setModelMetrics(modelInfo as unknown as ModelMetrics)
       } catch (modelErr) {
         // Model metrics are optional, don't fail if they're not available
         console.warn('Could not fetch model metrics:', modelErr)

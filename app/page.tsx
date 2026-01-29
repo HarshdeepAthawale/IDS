@@ -69,7 +69,8 @@ export default function Dashboard() {
         flaskApi.getPcapStats().catch(() => ({ total_detections: 0, critical_detections: 0 })),
       ])
 
-      const baseTotal = realtimeData?.summary?.total_anomalies || trafficResponse.summary.total_anomalies || 0
+      const trafficSummary = (trafficResponse as { summary?: { total_anomalies?: number } }).summary
+      const baseTotal = realtimeData?.summary?.total_anomalies || trafficSummary?.total_anomalies || 0
       const baseCritical = criticalResponse.unresolved_count || 0
 
       const data = {
