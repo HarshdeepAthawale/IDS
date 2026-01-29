@@ -12,7 +12,7 @@ from typing import Optional
 from flask import Blueprint, jsonify, request
 from werkzeug.utils import secure_filename
 
-from models.db_models import pcap_analyses_collection, pcap_analysis_to_dict
+from models.db_models import pcap_analyses_collection, pcap_analysis_to_dict, to_object_id
 from services.pcap_analyzer import PcapAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -271,3 +271,71 @@ def get_pcap_detection_stats():
         "total_detections": total_detections,
         "critical_detections": critical_detections,
     })
+
+
+@pcap_bp.route("/api/pcap/analyses", methods=["GET"])
+def list_pcap_analyses():
+    """Return a list of all stored PCAP analyses (id, filename, created_at, risk, metadata, detections count)."""
+    if pcap_analyses_collection is None:
+        return jsonify({"analyses": [], "error": "Database not available"}), 200
+
+    try:
+        cursor = pcap_analyses_collection.find(
+            {},
+            projection={
+                "_id": 1,
+                "filename": 1,
+                "created_at": 1,
+                "metadata": 1,
+                "risk": 1,
+                "detections": 1,
+            },
+        ).sort("created_at", -1)
+
+        analyses = []
+        for doc in cursor:
+            out = pcap_analysis_to_dict(doc)
+            created = out.get("created_at")
+            if hasattr(created, "isoformat"):
+                created = created.isoformat()
+            # Ensure list response is lean: include id, filename, created_at, risk, packets, detection count
+            analyses.append({
+                "id": out.get("id"),
+                "filename": out.get("filename") or (out.get("metadata") or {}).get("filename"),
+                "created_at": created,
+                "metadata": out.get("metadata"),
+                "risk": out.get("risk"),
+                "detections_count": len(out.get("detections") or []),
+            })
+        return jsonify({"analyses": analyses})
+    except Exception as e:
+        logger.warning("Failed to list PCAP analyses: %s", e)
+        return jsonify({"analyses": [], "error": str(e)}), 500
+
+
+@pcap_bp.route("/api/pcap/analyses/<analysis_id>", methods=["GET"])
+def get_pcap_analysis(analysis_id):
+    """Return full PCAP analysis by id (MongoDB ObjectId)."""
+    if pcap_analyses_collection is None:
+        return jsonify({"error": "Database not available"}), 503
+
+    try:
+        oid = to_object_id(analysis_id)
+    except ValueError:
+        return jsonify({"error": "Invalid analysis id"}), 400
+
+    try:
+        doc = pcap_analyses_collection.find_one(
+            {"_id": oid},
+            projection={"_id": 1, "metadata": 1, "summary": 1, "detections": 1, "risk": 1, "evidence": 1, "filename": 1, "created_at": 1},
+        )
+        if doc is None:
+            return jsonify({"error": "Analysis not found"}), 404
+        out = pcap_analysis_to_dict(doc)
+        meta = out.get("metadata") or {}
+        meta["cached"] = True
+        out["metadata"] = meta
+        return jsonify(out)
+    except Exception as e:
+        logger.warning("Failed to get PCAP analysis %s: %s", analysis_id, e)
+        return jsonify({"error": "Failed to fetch analysis"}), 500

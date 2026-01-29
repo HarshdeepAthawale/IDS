@@ -1,5 +1,7 @@
 # Flask IDS Backend
 
+For full project documentation (frontend, Docker, API, configuration), see the [root README](../README.md).
+
 A production-ready Flask backend for network intrusion detection with signature-based detection, ML-based anomaly detection, and insider threat monitoring.
 
 ## Features
