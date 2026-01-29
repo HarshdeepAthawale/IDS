@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify, current_app
 from models.db_models import traffic_stats_collection, traffic_stat_to_dict
-from services.logger import DatabaseLogger
+from services.logger import DatabaseLogger, normalize_protocol
 
 logger = logging.getLogger(__name__)
 
@@ -186,27 +186,35 @@ def get_protocol_stats():
                 stat_avg_packet_size = stat_total_bytes / stat_total_packets if stat_total_packets > 0 else 0
             
             for protocol, count in protocol_dist.items():
+                # Normalize protocol name
+                normalized_protocol = normalize_protocol(protocol)
+                
+                # Skip invalid protocols
+                if not normalized_protocol or normalized_protocol == 'Other':
+                    continue
+                
                 # Handle non-numeric count values
                 if not isinstance(count, (int, float)):
                     try:
                         count = int(count)
                     except (ValueError, TypeError):
-                        logger.warning(f"Invalid protocol count for {protocol}: {count}")
+                        logger.warning(f"Invalid protocol count for {normalized_protocol}: {count}")
                         continue
                 
-                if protocol not in protocol_data:
-                    protocol_data[protocol] = {
+                # Use normalized protocol name for aggregation
+                if normalized_protocol not in protocol_data:
+                    protocol_data[normalized_protocol] = {
                         'total_packets': 0,
                         'total_bytes': 0,
                         'count': 0
                     }
                 
-                protocol_data[protocol]['total_packets'] += count
-                protocol_data[protocol]['count'] += 1
+                protocol_data[normalized_protocol]['total_packets'] += count
+                protocol_data[normalized_protocol]['count'] += 1
                 
                 # Estimate bytes per protocol using overall avg_packet_size from the document
                 estimated_bytes = count * stat_avg_packet_size
-                protocol_data[protocol]['total_bytes'] += estimated_bytes
+                protocol_data[normalized_protocol]['total_bytes'] += estimated_bytes
                 
                 total_packets += count
         

@@ -1,1 +1,1 @@
-# Models package for Flask IDS Backend
+# MongoDB models and database utilities for IDS backend

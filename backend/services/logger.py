@@ -4,7 +4,7 @@ Handles saving alerts, traffic statistics, and user activities to database
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
 from models.db_models import (
@@ -14,6 +14,72 @@ from models.db_models import (
 from .cache import CacheService, CachePrefixes, CacheTTL
 
 logger = logging.getLogger(__name__)
+
+# Protocol number to name mapping (IANA IP protocol numbers)
+PROTOCOL_MAP = {
+    0: 'HOPOPT',      # IPv6 Hop-by-Hop Option
+    1: 'ICMP',        # Internet Control Message Protocol
+    2: 'IGMP',        # Internet Group Management Protocol
+    4: 'IPv4',        # IPv4 encapsulation
+    6: 'TCP',         # Transmission Control Protocol
+    17: 'UDP',        # User Datagram Protocol
+    41: 'IPv6',       # IPv6 encapsulation
+    47: 'GRE',        # Generic Routing Encapsulation
+    50: 'ESP',        # Encapsulating Security Payload
+    51: 'AH',         # Authentication Header
+    58: 'ICMPv6',     # ICMP for IPv6
+    89: 'OSPF',       # Open Shortest Path First
+    132: 'SCTP',      # Stream Control Transmission Protocol
+}
+
+def normalize_protocol(protocol: Any) -> str:
+    """
+    Normalize protocol identifier to a consistent string name
+    
+    Args:
+        protocol: Protocol identifier (string, number, or other)
+        
+    Returns:
+        Normalized protocol name as string
+    """
+    if protocol is None:
+        return 'Other'
+    
+    # If already a string, normalize it
+    if isinstance(protocol, str):
+        protocol_upper = protocol.upper().strip()
+        # Handle common variations
+        if protocol_upper in ['TCP', 'UDP', 'ICMP', 'ICMPV6', 'IPV6', 'IPV4', 'ARP', 'GRE', 'ESP', 'AH', 'OSPF', 'SCTP', 'OTHER', 'UNKNOWN']:
+            # Normalize casing
+            if protocol_upper == 'ICMPV6':
+                return 'ICMPv6'
+            elif protocol_upper == 'IPV6':
+                return 'IPv6'
+            elif protocol_upper == 'IPV4':
+                return 'IPv4'
+            elif protocol_upper in ['UNKNOWN', 'OTHER']:
+                return 'Other'
+            else:
+                return protocol_upper
+        # Handle ether type strings
+        if protocol_upper.startswith('ETHER-'):
+            return protocol_upper  # Keep as-is for ether types
+        # Return as-is if it's a valid string
+        return protocol_upper if protocol_upper else 'Other'
+    
+    # If it's a number, map it to protocol name
+    if isinstance(protocol, (int, float)):
+        protocol_num = int(protocol)
+        return PROTOCOL_MAP.get(protocol_num, f'Protocol-{protocol_num}')
+    
+    # Fallback for unknown types
+    try:
+        protocol_str = str(protocol).upper().strip()
+        if protocol_str in ['UNKNOWN', 'OTHER', '']:
+            return 'Other'
+        return protocol_str if protocol_str else 'Other'
+    except:
+        return 'Other'
 
 class DatabaseLogger:
     """
@@ -30,7 +96,7 @@ class DatabaseLogger:
         self.config = config
         self.alert_cache = {}  # For deduplication
         self.traffic_stats_cache = defaultdict(int)
-        self.last_traffic_flush = datetime.utcnow()
+        self.last_traffic_flush = datetime.now(timezone.utc)
         
         # Initialize cache service
         self.cache = CacheService(config)
@@ -51,7 +117,7 @@ class DatabaseLogger:
         try:
             # Create deduplication key
             dedup_key = self._create_dedup_key(detection_result, packet_data)
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
             
             # Check for recent duplicate alert
             if self._is_duplicate_alert(dedup_key, current_time):
@@ -80,7 +146,11 @@ class DatabaseLogger:
             }
             
             # Save to database
-            result = alerts_collection.insert_one(alert_doc)
+            if alerts_collection is not None:
+                result = alerts_collection.insert_one(alert_doc)
+            else:
+                logger.warning("alerts_collection is None, skipping alert insert")
+                return None
             alert_doc['_id'] = result.inserted_id
             
             # Update cache
@@ -124,14 +194,20 @@ class DatabaseLogger:
         Returns:
             True if duplicate
         """
+        # Use getattr with default to handle missing config attribute
+        dedup_window = getattr(self.config, 'ALERT_DEDUP_WINDOW', 300)
+        
         # Check cache first
         if dedup_key in self.alert_cache:
             last_time = self.alert_cache[dedup_key]
-            if (current_time - last_time).total_seconds() < self.config.ALERT_DEDUP_WINDOW:
+            # Ensure last_time is timezone-aware
+            if last_time.tzinfo is None:
+                last_time = last_time.replace(tzinfo=timezone.utc)
+            if (current_time - last_time).total_seconds() < dedup_window:
                 return True
         
         # Check database for recent alerts
-        cutoff_time = current_time - timedelta(seconds=self.config.ALERT_DEDUP_WINDOW)
+        cutoff_time = current_time - timedelta(seconds=dedup_window)
         
         # Parse dedup key
         parts = dedup_key.split(':')
@@ -151,17 +227,24 @@ class DatabaseLogger:
             except (ValueError, TypeError):
                 query['port'] = dest_port
             
-            recent_alert = alerts_collection.find_one(query)
-            
-            if recent_alert:
-                return True
+            if alerts_collection is not None:
+                try:
+                    recent_alert = alerts_collection.find_one(query)
+                    if recent_alert:
+                        return True
+                except Exception as e:
+                    logger.debug(f"Error checking for duplicate alert: {e}")
+            else:
+                logger.warning("alerts_collection is None, skipping duplicate check")
         
         return False
     
     def _clean_alert_cache(self):
         """Clean old entries from alert cache"""
-        current_time = datetime.utcnow()
-        cutoff_time = current_time - timedelta(seconds=self.config.ALERT_DEDUP_WINDOW * 2)
+        current_time = datetime.now(timezone.utc)
+        # Use getattr with default to handle missing config attribute
+        dedup_window = getattr(self.config, 'ALERT_DEDUP_WINDOW', 300)
+        cutoff_time = current_time - timedelta(seconds=dedup_window * 2)
         
         keys_to_remove = [
             key for key, timestamp in self.alert_cache.items()
@@ -179,8 +262,8 @@ class DatabaseLogger:
             packet_data: Packet data to aggregate
         """
         try:
-            # Update cache
-            protocol = packet_data.get('protocol', 'unknown')
+            # Normalize protocol name before caching
+            protocol = normalize_protocol(packet_data.get('protocol', 'Other'))
             src_ip = packet_data.get('src_ip', 'unknown')
             dst_port = packet_data.get('dst_port', 0)
             
@@ -191,7 +274,7 @@ class DatabaseLogger:
             self.traffic_stats_cache[f'dst_port_{dst_port}'] += 1
             
             # Flush to database periodically (30 seconds instead of 60)
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
             flush_interval = getattr(self.config, 'TRAFFIC_STATS_FLUSH_INTERVAL', 30)
             if (current_time - self.last_traffic_flush).total_seconds() > flush_interval:
                 self._flush_traffic_stats()
@@ -213,7 +296,14 @@ class DatabaseLogger:
             for key, count in self.traffic_stats_cache.items():
                 if key.startswith('protocol_'):
                     protocol = key.replace('protocol_', '')
-                    protocol_dist[protocol] = count
+                    # Normalize protocol name and filter out invalid ones
+                    normalized_protocol = normalize_protocol(protocol)
+                    if normalized_protocol and (normalized_protocol != 'Other' or count > 0):
+                        # Aggregate counts for the same normalized protocol
+                        if normalized_protocol in protocol_dist:
+                            protocol_dist[normalized_protocol] += count
+                        else:
+                            protocol_dist[normalized_protocol] = count
                 elif key.startswith('src_ip_'):
                     src_ip = key.replace('src_ip_', '')
                     src_ip_counts[src_ip] = count
@@ -244,11 +334,18 @@ class DatabaseLogger:
             ))
             
             # Get recent anomaly count
-            recent_cutoff = datetime.utcnow() - timedelta(minutes=1)
-            recent_anomalies = alerts_collection.count_documents({
-                'type': 'anomaly',
-                'timestamp': {'$gt': recent_cutoff}
-            })
+            recent_cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
+            if alerts_collection is not None:
+                try:
+                    recent_anomalies = alerts_collection.count_documents({
+                        'type': 'anomaly',
+                        'timestamp': {'$gt': recent_cutoff}
+                    })
+                except Exception as e:
+                    logger.debug(f"Error counting recent anomalies: {e}")
+                    recent_anomalies = 0
+            else:
+                recent_anomalies = 0
             
             # Calculate flush interval for rate calculations
             flush_interval = getattr(self.config, 'TRAFFIC_STATS_FLUSH_INTERVAL', 30)
@@ -266,14 +363,17 @@ class DatabaseLogger:
                 'top_dest_ports': top_dest_ports,
                 'avg_packet_size': total_bytes / total_packets if total_packets > 0 else 0,
                 'connection_success_rate': None,  # Can be calculated later if needed
-                'timestamp': datetime.utcnow()
+                'timestamp': datetime.now(timezone.utc)
             }
             
-            traffic_stats_collection.insert_one(traffic_stat_doc)
+            if traffic_stats_collection is not None:
+                traffic_stats_collection.insert_one(traffic_stat_doc)
+            else:
+                logger.warning("traffic_stats_collection is None, skipping insert")
             
             # Clear cache
             self.traffic_stats_cache.clear()
-            self.last_traffic_flush = datetime.utcnow()
+            self.last_traffic_flush = datetime.now(timezone.utc)
             
             logger.debug(f"Flushed traffic stats: {total_packets} packets, {active_connections} connections")
             
@@ -311,7 +411,7 @@ class DatabaseLogger:
                 'session_id': kwargs.get('session_id'),
                 'user_agent': kwargs.get('user_agent'),
                 'geolocation': kwargs.get('geolocation'),
-                'timestamp': datetime.utcnow()
+                'timestamp': datetime.now(timezone.utc)
             }
             
             result = user_activities_collection.insert_one(activity_doc)
@@ -407,9 +507,13 @@ class DatabaseLogger:
                 logger.debug("Returning traffic stats from cache")
                 return cached_result
             
-            stats = list(traffic_stats_collection.find()
-                        .sort('timestamp', -1)
-                        .limit(limit))
+            if traffic_stats_collection is not None:
+                stats = list(traffic_stats_collection.find()
+                            .sort('timestamp', -1)
+                            .limit(limit))
+            else:
+                logger.warning("traffic_stats_collection is None, returning empty list")
+                stats = []
             
             # Cache the result
             stat_dicts = [traffic_stat_to_dict(stat) for stat in stats]
@@ -491,7 +595,7 @@ class DatabaseLogger:
                     'packet_rate': 0,
                     'byte_rate': 0,
                     'avg_packet_size': 0,
-                    'timestamp': datetime.utcnow().isoformat()
+                    'timestamp': datetime.now(timezone.utc).isoformat()
                 }
             
             # Calculate protocol distribution
@@ -502,7 +606,14 @@ class DatabaseLogger:
             for key, count in self.traffic_stats_cache.items():
                 if key.startswith('protocol_'):
                     protocol = key.replace('protocol_', '')
-                    protocol_dist[protocol] = count
+                    # Normalize protocol name and filter out invalid ones
+                    normalized_protocol = normalize_protocol(protocol)
+                    if normalized_protocol and (normalized_protocol != 'Other' or count > 0):
+                        # Aggregate counts for the same normalized protocol
+                        if normalized_protocol in protocol_dist:
+                            protocol_dist[normalized_protocol] += count
+                        else:
+                            protocol_dist[normalized_protocol] = count
                 elif key.startswith('src_ip_'):
                     src_ip = key.replace('src_ip_', '')
                     src_ip_counts[src_ip] = count
@@ -526,7 +637,7 @@ class DatabaseLogger:
             total_bytes = self.traffic_stats_cache.get('total_bytes', 0)
             
             # Calculate rates based on time since last flush
-            time_since_flush = (datetime.utcnow() - self.last_traffic_flush).total_seconds()
+            time_since_flush = (datetime.now(timezone.utc) - self.last_traffic_flush).total_seconds()
             if time_since_flush > 0:
                 packet_rate = total_packets / time_since_flush
                 byte_rate = total_bytes / time_since_flush
@@ -550,7 +661,7 @@ class DatabaseLogger:
                 'packet_rate': packet_rate,
                 'byte_rate': byte_rate,
                 'avg_packet_size': total_bytes / total_packets if total_packets > 0 else 0,
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'cache_age_seconds': time_since_flush
             }
             
@@ -575,12 +686,16 @@ class DatabaseLogger:
                 logger.warning(f"Invalid alert ID format: {alert_id}")
                 return False
             
+            if alerts_collection is None:
+                logger.warning("alerts_collection is None, cannot resolve alert")
+                return False
+            
             result = alerts_collection.update_one(
                 {'_id': obj_id},
                 {
                     '$set': {
                         'resolved': True,
-                        'resolved_at': datetime.utcnow(),
+                        'resolved_at': datetime.now(timezone.utc),
                         'resolved_by': resolved_by
                     }
                 }
@@ -613,7 +728,7 @@ class DatabaseLogger:
                     'unresolved_alerts': 0,
                     'alerts_by_type': {},
                     'alerts_by_severity': {},
-                    'last_updated': datetime.utcnow().isoformat()
+                    'last_updated': datetime.now(timezone.utc).isoformat()
                 }
             
             cache_key = "summary"
@@ -624,36 +739,50 @@ class DatabaseLogger:
                 logger.debug("Returning alert summary from cache")
                 return cached_result
             
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
             
             # Recent alerts (last 24 hours)
             recent_cutoff = current_time - timedelta(hours=24)
-            recent_alerts = alerts_collection.count_documents({
-                'timestamp': {'$gt': recent_cutoff}
-            })
-            
-            # Unresolved alerts
-            unresolved_alerts = alerts_collection.count_documents({
-                'resolved': False
-            })
+            if alerts_collection is not None:
+                try:
+                    recent_alerts = alerts_collection.count_documents({
+                        'timestamp': {'$gt': recent_cutoff}
+                    })
+                    
+                    # Unresolved alerts
+                    unresolved_alerts = alerts_collection.count_documents({
+                        'resolved': False
+                    })
+                except Exception as e:
+                    logger.error(f"Error getting alert counts: {e}")
+                    recent_alerts = 0
+                    unresolved_alerts = 0
+            else:
+                logger.warning("alerts_collection is None, using default values")
+                recent_alerts = 0
+                unresolved_alerts = 0
             
             # Alerts by type using aggregation
-            type_pipeline = [
-                {'$match': {'timestamp': {'$gt': recent_cutoff}}},
-                {'$group': {'_id': '$type', 'count': {'$sum': 1}}}
-            ]
             type_counts = {}
-            for result in alerts_collection.aggregate(type_pipeline):
-                type_counts[result['_id']] = result['count']
-            
-            # Alerts by severity using aggregation
-            severity_pipeline = [
-                {'$match': {'timestamp': {'$gt': recent_cutoff}}},
-                {'$group': {'_id': '$severity', 'count': {'$sum': 1}}}
-            ]
             severity_counts = {}
-            for result in alerts_collection.aggregate(severity_pipeline):
-                severity_counts[result['_id']] = result['count']
+            if alerts_collection is not None:
+                try:
+                    type_pipeline = [
+                        {'$match': {'timestamp': {'$gt': recent_cutoff}}},
+                        {'$group': {'_id': '$type', 'count': {'$sum': 1}}}
+                    ]
+                    for result in alerts_collection.aggregate(type_pipeline):
+                        type_counts[result['_id']] = result['count']
+                    
+                    # Alerts by severity using aggregation
+                    severity_pipeline = [
+                        {'$match': {'timestamp': {'$gt': recent_cutoff}}},
+                        {'$group': {'_id': '$severity', 'count': {'$sum': 1}}}
+                    ]
+                    for result in alerts_collection.aggregate(severity_pipeline):
+                        severity_counts[result['_id']] = result['count']
+                except Exception as e:
+                    logger.error(f"Error getting alert aggregations: {e}")
             
             summary = {
                 'total_recent_alerts': recent_alerts,
@@ -680,25 +809,37 @@ class DatabaseLogger:
             days_to_keep: Number of days of data to keep
         """
         try:
-            cutoff_date = datetime.utcnow() - timedelta(days=days_to_keep)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
             
             # Delete old alerts
-            old_alerts_result = alerts_collection.delete_many({
-                'timestamp': {'$lt': cutoff_date}
-            })
-            old_alerts = old_alerts_result.deleted_count
+            if alerts_collection is not None:
+                old_alerts_result = alerts_collection.delete_many({
+                    'timestamp': {'$lt': cutoff_date}
+                })
+                old_alerts = old_alerts_result.deleted_count
+            else:
+                logger.warning("alerts_collection is None, skipping cleanup")
+                old_alerts = 0
             
             # Delete old traffic stats
-            old_traffic_result = traffic_stats_collection.delete_many({
-                'timestamp': {'$lt': cutoff_date}
-            })
-            old_traffic = old_traffic_result.deleted_count
+            if traffic_stats_collection is not None:
+                old_traffic_result = traffic_stats_collection.delete_many({
+                    'timestamp': {'$lt': cutoff_date}
+                })
+                old_traffic = old_traffic_result.deleted_count
+            else:
+                logger.warning("traffic_stats_collection is None, skipping cleanup")
+                old_traffic = 0
             
             # Delete old user activities
-            old_activities_result = user_activities_collection.delete_many({
-                'timestamp': {'$lt': cutoff_date}
-            })
-            old_activities = old_activities_result.deleted_count
+            if user_activities_collection is not None:
+                old_activities_result = user_activities_collection.delete_many({
+                    'timestamp': {'$lt': cutoff_date}
+                })
+                old_activities = old_activities_result.deleted_count
+            else:
+                logger.warning("user_activities_collection is None, skipping cleanup")
+                old_activities = 0
             
             logger.info(f"Cleaned up old data: {old_alerts} alerts, {old_traffic} traffic stats, {old_activities} activities")
             

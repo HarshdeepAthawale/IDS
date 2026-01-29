@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 import { WebSocketProviderWrapper } from '@/components/websocket-provider-wrapper'
+import { PcapAnalysisProvider } from '@/contexts/pcap-analysis-context'
 
 const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
@@ -22,8 +23,10 @@ export default function RootLayout({
     <html lang="en">
       <body className={`font-sans antialiased`}>
         <WebSocketProviderWrapper>
-          {children}
-          <Analytics />
+          <PcapAnalysisProvider>
+            {children}
+            <Analytics />
+          </PcapAnalysisProvider>
         </WebSocketProviderWrapper>
       </body>
     </html>

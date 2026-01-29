@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { AlertCircle, BarChart3, Users, Home, Shield, Activity, FileText, BarChart } from "lucide-react"
+import { AlertCircle, BarChart3, Home, Shield, Activity, FileText, BarChart } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface SidebarProps {
@@ -18,7 +18,6 @@ export default function Sidebar({ open }: SidebarProps) {
     { href: "/realtime", label: "Real-time", icon: Activity },
     { href: "/analysis", label: "Analysis", icon: FileText },
     { href: "/summary", label: "Summary", icon: BarChart },
-    { href: "/insider", label: "Insider Threats", icon: Users },
   ]
 
   return (

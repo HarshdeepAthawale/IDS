@@ -10,7 +10,7 @@ import sys
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timezone
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -20,11 +20,11 @@ from config import config, DevelopmentConfig
 from models.db_models import init_db, alerts_collection
 from services.packet_sniffer import PacketSniffer
 from services.analyzer import PacketAnalyzer
-from services.logger import DatabaseLogger
+from services.logger import DatabaseLogger, normalize_protocol
 from routes.alerts import alerts_bp, init_logger as init_alerts_logger
 from routes.stats import stats_bp, init_logger as init_stats_logger
 from routes.analyze import analyze_bp, init_services as init_analyze_services
-from routes.insider import insider_bp, init_logger as init_insider_logger
+from routes.pcap import pcap_bp, init_pcap_services
 from routes.training import training_bp, init_services as init_training_services
 from datetime import timedelta
 
@@ -96,7 +96,7 @@ def create_app(config_name='default'):
     init_alerts_logger(logger_service)
     init_stats_logger(logger_service)
     init_analyze_services(analyzer, logger_service)
-    init_insider_logger(logger_service)
+    init_pcap_services(app.config, packet_analyzer=analyzer)
     
     # Initialize training services if classification is enabled
     training_data_collector = None
@@ -116,8 +116,8 @@ def create_app(config_name='default'):
     app.register_blueprint(alerts_bp)
     app.register_blueprint(stats_bp)
     app.register_blueprint(analyze_bp)
-    app.register_blueprint(insider_bp)
     app.register_blueprint(training_bp)
+    app.register_blueprint(pcap_bp)
     
     # Apply rate limits to specific endpoints after blueprint registration
     # Use .get() to safely access view_functions (handles missing functions gracefully)
@@ -135,6 +135,10 @@ def create_app(config_name='default'):
         limiter.limit("20 per minute")(training_bp.view_functions['train_model'])
     if 'label_sample' in training_bp.view_functions:
         limiter.limit("20 per minute")(training_bp.view_functions['label_sample'])
+    if 'analyze_pcap' in pcap_bp.view_functions:
+        limiter.limit("8 per minute")(pcap_bp.view_functions['analyze_pcap'])
+    if 'get_last_result' in pcap_bp.view_functions:
+        limiter.limit("20 per minute")(pcap_bp.view_functions['get_last_result'])
     
     # Store services in app context for access in routes
     app.analyzer = analyzer
@@ -268,7 +272,7 @@ def create_app(config_name='default'):
         
         return jsonify({
             'status': overall_status,
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'version': '1.0.0',
             'services': {
                 'database': db_status,
@@ -421,7 +425,7 @@ def create_app(config_name='default'):
                 'src_port': 54321,
                 'payload_size': 0,
                 'raw_size': 0,
-                'timestamp': datetime.utcnow()
+                'timestamp': datetime.now(timezone.utc)
             }
             
             # Log the alert
@@ -437,7 +441,7 @@ def create_app(config_name='default'):
                     'description': alert.get('description', 'Test alert'),
                     'source_ip': alert.get('source_ip', '192.168.1.100'),
                     'dest_ip': alert.get('dest_ip', '10.0.0.1'),
-                    'timestamp': datetime.utcnow().isoformat()
+                    'timestamp': datetime.now(timezone.utc).isoformat()
                 }
                 
                 try:
@@ -506,7 +510,7 @@ def create_app(config_name='default'):
                 'protocol': data.get('protocol', 'TCP'),
                 'payload_size': data.get('payload_size', 100),
                 'raw_size': data.get('raw_size', 150),
-                'timestamp': datetime.utcnow(),
+                'timestamp': datetime.now(timezone.utc),
                 'flags': None,
                 'payload_preview': None
             }
@@ -514,8 +518,8 @@ def create_app(config_name='default'):
             # Update packet sniffer statistics to reflect injected packet
             app.packet_sniffer.stats['total_packets'] += 1
             app.packet_sniffer.stats['total_bytes'] += test_packet['raw_size']
-            app.packet_sniffer.stats['last_packet_time'] = datetime.utcnow()
-            app.packet_sniffer.recent_packet_timestamps.append(datetime.utcnow())
+            app.packet_sniffer.stats['last_packet_time'] = datetime.now(timezone.utc)
+            app.packet_sniffer.recent_packet_timestamps.append(datetime.now(timezone.utc))
             
             # Update connection tracking
             app.packet_sniffer._update_connection_tracking(test_packet)
@@ -538,7 +542,7 @@ def create_app(config_name='default'):
                         'description': alert.get('description', ''),
                         'source_ip': alert.get('source_ip', test_packet['src_ip']),
                         'dest_ip': alert.get('dest_ip', test_packet['dst_ip']),
-                        'timestamp': datetime.utcnow().isoformat()
+                        'timestamp': datetime.now(timezone.utc).isoformat()
                     }
                     try:
                         app._socketio.emit('new_alert', alert_broadcast, room='dashboard')
@@ -580,11 +584,18 @@ def create_app(config_name='default'):
         """
         try:
             with app.app_context():
+                # Ensure since_time is timezone-aware
+                if since_time.tzinfo is None:
+                    since_time = since_time.replace(tzinfo=timezone.utc)
+                
                 # Query alerts created since the given time
-                recent_alerts_count = alerts_collection.count_documents({
-                    'timestamp': {'$gte': since_time}
-                })
-                return recent_alerts_count
+                if alerts_collection is not None:
+                    recent_alerts_count = alerts_collection.count_documents({
+                        'timestamp': {'$gte': since_time}
+                    })
+                    return recent_alerts_count
+                else:
+                    return 0
         except Exception as e:
             logger.debug(f"Error getting recent threats count: {e}")
             return 0
@@ -593,7 +604,7 @@ def create_app(config_name='default'):
     def periodic_broadcast():
         """Send periodic updates via WebSocket even when no packets are captured"""
         broadcast_interval = getattr(app.config, 'WEBSOCKET_BROADCAST_INTERVAL', 5)
-        last_broadcast_time = datetime.utcnow()
+        last_broadcast_time = datetime.now(timezone.utc)
         logger.info(f"[PeriodicBroadcast] Thread started, broadcasting every {broadcast_interval} seconds")
         
         while True:
@@ -610,7 +621,10 @@ def create_app(config_name='default'):
                         sniffer_stats = app.packet_sniffer.get_stats()
                         
                         # Get recent threats count since last broadcast
-                        current_time = datetime.utcnow()
+                        current_time = datetime.now(timezone.utc)
+                        # Ensure last_broadcast_time is timezone-aware
+                        if last_broadcast_time.tzinfo is None:
+                            last_broadcast_time = last_broadcast_time.replace(tzinfo=timezone.utc)
                         recent_threats = _get_recent_threats_count(last_broadcast_time)
                         last_broadcast_time = current_time
                         
@@ -641,7 +655,7 @@ def create_app(config_name='default'):
         """Start packet processing in background thread with enhanced WebSocket broadcasting"""
         logger.info("Starting packet processing thread")
         
-        last_broadcast_time = datetime.utcnow()
+        last_broadcast_time = datetime.now(timezone.utc)
         last_connection_count = 0
         packet_count_since_broadcast = 0
         broadcast_interval = getattr(app.config, 'WEBSOCKET_BROADCAST_INTERVAL', 5)
@@ -677,7 +691,7 @@ def create_app(config_name='default'):
                                     'description': alert.get('description', detection.get('description', '')),
                                     'source_ip': alert.get('source_ip', packet_data.get('src_ip', 'unknown')),
                                     'dest_ip': alert.get('dest_ip', packet_data.get('dst_ip', 'unknown')),
-                                    'timestamp': datetime.utcnow().isoformat()
+                                    'timestamp': datetime.now(timezone.utc).isoformat()
                                 }
                                 try:
                                     app._socketio.emit('new_alert', alert_broadcast, room='dashboard')
@@ -693,7 +707,7 @@ def create_app(config_name='default'):
                     packet_count_since_broadcast += 1
                     
                     # Check if we need to broadcast (every 5 seconds OR every 5 packets, whichever comes first)
-                    current_time = datetime.utcnow()
+                    current_time = datetime.now(timezone.utc)
                     time_since_broadcast = (current_time - last_broadcast_time).total_seconds()
                     current_connection_count = len(app.packet_sniffer.connections)
                     
@@ -715,7 +729,14 @@ def create_app(config_name='default'):
                             for key, count in app.logger_service.traffic_stats_cache.items():
                                 if key.startswith('protocol_'):
                                     protocol = key.replace('protocol_', '')
-                                    protocol_dist[protocol] = count
+                                    # Normalize protocol name before sending
+                                    normalized_protocol = normalize_protocol(protocol)
+                                    if normalized_protocol and normalized_protocol != 'Other':
+                                        # Aggregate counts for the same normalized protocol
+                                        if normalized_protocol in protocol_dist:
+                                            protocol_dist[normalized_protocol] += count
+                                        else:
+                                            protocol_dist[normalized_protocol] = count
                             
                             # Format stats for frontend
                             packet_rate = sniffer_stats.get('packet_rate', 0)

@@ -12,10 +12,37 @@ from typing import Dict, Any, Optional, Callable
 from collections import deque
 from scapy.all import *
 from scapy.layers.inet import IP, TCP, UDP, ICMP
-from scapy.layers.l2 import Ether
+from scapy.layers.l2 import Ether, ARP
+from scapy.layers.inet6 import IPv6
 from scapy.packet import Packet
 
 logger = logging.getLogger(__name__)
+
+# Protocol number to name mapping (IANA IP protocol numbers)
+PROTOCOL_MAP = {
+    0: 'HOPOPT',      # IPv6 Hop-by-Hop Option
+    1: 'ICMP',        # Internet Control Message Protocol
+    2: 'IGMP',        # Internet Group Management Protocol
+    4: 'IPv4',        # IPv4 encapsulation
+    6: 'TCP',         # Transmission Control Protocol
+    17: 'UDP',        # User Datagram Protocol
+    41: 'IPv6',       # IPv6 encapsulation
+    47: 'GRE',        # Generic Routing Encapsulation
+    50: 'ESP',        # Encapsulating Security Payload
+    51: 'AH',         # Authentication Header
+    58: 'ICMPv6',     # ICMP for IPv6
+    89: 'OSPF',       # Open Shortest Path First
+    132: 'SCTP',      # Stream Control Transmission Protocol
+}
+
+# EtherType to protocol name mapping
+ETHERTYPE_MAP = {
+    0x0800: 'IPv4',
+    0x0806: 'ARP',
+    0x86DD: 'IPv6',
+    0x8847: 'MPLS',
+    0x8848: 'MPLS',
+}
 
 class PacketSniffer:
     """
@@ -77,6 +104,56 @@ class PacketSniffer:
             time.sleep(getattr(config, 'SCAPY_AUTO_START_DELAY', 0))
             self.start_capture()
     
+    def _normalize_protocol(self, protocol: Any) -> str:
+        """
+        Normalize protocol identifier to a consistent string name
+        
+        Args:
+            protocol: Protocol identifier (string, number, or other)
+            
+        Returns:
+            Normalized protocol name as string
+        """
+        if protocol is None:
+            return 'Other'
+        
+        # If already a string, normalize it
+        if isinstance(protocol, str):
+            protocol_upper = protocol.upper().strip()
+            # Handle common variations
+            if protocol_upper in ['TCP', 'UDP', 'ICMP', 'ICMPV6', 'IPV6', 'IPV4', 'ARP', 'GRE', 'ESP', 'AH', 'OSPF', 'SCTP']:
+                # Normalize casing
+                if protocol_upper == 'ICMPV6':
+                    return 'ICMPv6'
+                elif protocol_upper == 'IPV6':
+                    return 'IPv6'
+                elif protocol_upper == 'IPV4':
+                    return 'IPv4'
+                else:
+                    return protocol_upper
+            # Handle ether type strings
+            if protocol_upper.startswith('ETHER-'):
+                ether_type = protocol_upper.replace('ETHER-', '')
+                try:
+                    ether_num = int(ether_type, 16) if '0x' in ether_type else int(ether_type)
+                    return ETHERTYPE_MAP.get(ether_num, f'Ether-{ether_type}')
+                except (ValueError, TypeError):
+                    return f'Ether-{ether_type}'
+            # Return as-is if it's a valid string
+            return protocol_upper if protocol_upper else 'Other'
+        
+        # If it's a number, map it to protocol name
+        if isinstance(protocol, (int, float)):
+            protocol_num = int(protocol)
+            return PROTOCOL_MAP.get(protocol_num, f'Protocol-{protocol_num}')
+        
+        # Fallback for unknown types
+        try:
+            protocol_str = str(protocol).upper().strip()
+            return protocol_str if protocol_str else 'Other'
+        except:
+            return 'Other'
+    
     def _parse_packet(self, packet: Packet) -> Optional[Dict[str, Any]]:
         """
         Parse a Scapy packet into a standardized format
@@ -91,7 +168,7 @@ class PacketSniffer:
             parsed = {
                 'timestamp': datetime.utcnow(),
                 'raw_size': len(packet),
-                'protocol': 'unknown',
+                'protocol': 'Other',
                 'src_ip': None,
                 'dst_ip': None,
                 'src_port': None,
@@ -106,7 +183,7 @@ class PacketSniffer:
                 ip_layer = packet[IP]
                 parsed['src_ip'] = ip_layer.src
                 parsed['dst_ip'] = ip_layer.dst
-                parsed['protocol'] = ip_layer.proto
+                protocol_num = ip_layer.proto
                 
                 # Extract transport layer information
                 if TCP in packet:
@@ -139,12 +216,76 @@ class PacketSniffer:
                     parsed['protocol'] = 'ICMP'
                     icmp_layer = packet[ICMP]
                     parsed['flags'] = str(icmp_layer.type)
+                else:
+                    # IP packet without recognized transport layer - normalize protocol number
+                    parsed['protocol'] = self._normalize_protocol(protocol_num)
                     
+            # Handle IPv6 packets
+            elif IPv6 in packet:
+                ipv6_layer = packet[IPv6]
+                parsed['src_ip'] = ipv6_layer.src
+                parsed['dst_ip'] = ipv6_layer.dst
+                protocol_num = ipv6_layer.nh  # Next header field
+                
+                # Check for ICMPv6 (protocol number 58)
+                if protocol_num == 58:
+                    parsed['protocol'] = 'ICMPv6'
+                    # Try to extract ICMPv6 layer - check for any ICMPv6 message type
+                    try:
+                        # Check for common ICMPv6 layer types by iterating through packet layers
+                        for layer in packet.layers():
+                            layer_name = layer.__name__
+                            if 'ICMPv6' in layer_name:
+                                icmpv6_layer = packet[layer]
+                                # Try to get type field
+                                if hasattr(icmpv6_layer, 'type'):
+                                    parsed['flags'] = str(icmpv6_layer.type)
+                                elif hasattr(icmpv6_layer, 'code'):
+                                    parsed['flags'] = str(icmpv6_layer.code)
+                                else:
+                                    parsed['flags'] = 'unknown'
+                                break
+                        else:
+                            # No ICMPv6 layer found, use protocol number
+                            parsed['flags'] = '58'
+                    except Exception as e:
+                        logger.debug(f"Could not extract ICMPv6 details: {e}")
+                        parsed['flags'] = 'unknown'
+                elif TCP in packet:
+                    tcp_layer = packet[TCP]
+                    parsed['src_port'] = tcp_layer.sport
+                    parsed['dst_port'] = tcp_layer.dport
+                    parsed['protocol'] = 'TCP'
+                elif UDP in packet:
+                    udp_layer = packet[UDP]
+                    parsed['src_port'] = udp_layer.sport
+                    parsed['dst_port'] = udp_layer.dport
+                    parsed['protocol'] = 'UDP'
+                else:
+                    # IPv6 packet without recognized transport layer
+                    parsed['protocol'] = self._normalize_protocol(protocol_num)
+                    
+            # Handle ARP packets
+            elif ARP in packet:
+                parsed['protocol'] = 'ARP'
+                arp_layer = packet[ARP]
+                parsed['src_ip'] = arp_layer.psrc
+                parsed['dst_ip'] = arp_layer.pdst
+                
             elif Ether in packet:
                 # Handle non-IP traffic
                 ether_layer = packet[Ether]
-                parsed['protocol'] = f"Ether-{ether_layer.type}"
-                
+                ether_type = ether_layer.type
+                # Map ethertype to protocol name
+                protocol_name = ETHERTYPE_MAP.get(ether_type, f'Ether-{hex(ether_type)}')
+                parsed['protocol'] = self._normalize_protocol(protocol_name)
+            else:
+                # Unknown packet type
+                parsed['protocol'] = 'Other'
+            
+            # Ensure protocol is always normalized to a string
+            parsed['protocol'] = self._normalize_protocol(parsed['protocol'])
+            
             # Extract application layer data for analysis
             self._extract_application_data(packet, parsed)
             

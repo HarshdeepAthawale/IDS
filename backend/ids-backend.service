@@ -1,0 +1,48 @@
+[Unit]
+Description=IDS Backend Service
+After=network.target mongodb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ids-backend
+Group=ids-backend
+WorkingDirectory=/opt/ids/backend
+Environment="PATH=/opt/ids/backend/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="FLASK_ENV=production"
+Environment="FLASK_HOST=0.0.0.0"
+Environment="FLASK_PORT=3002"
+
+# Capabilities for packet capture
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ids/backend
+ReadOnlyPaths=/usr /bin /sbin /lib /lib64
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Start command
+ExecStart=/opt/ids/backend/venv/bin/python app.py
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ids-backend
+
+[Install]
+WantedBy=multi-user.target

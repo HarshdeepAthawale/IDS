@@ -1,18 +1,28 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
+import Link from "next/link"
 import Layout from "@/components/layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { AlertCircle, TrendingUp, RefreshCw, CheckCircle, XCircle, Calendar as CalendarIcon, Filter, Download, Trash2 } from "lucide-react"
+import { AlertCircle, TrendingUp, RefreshCw, CheckCircle, XCircle, Calendar as CalendarIcon, Filter, Download, Trash2, FileSearch, ExternalLink } from "lucide-react"
 import { flaskApi } from "@/lib/flask-api"
 import { config } from "@/lib/config"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
+
+interface PcapDetectionItem {
+  id: string
+  title: string
+  severity: "low" | "medium" | "high" | "critical"
+  description?: string
+  ml_source?: string
+}
 
 interface Alert {
   id: string
@@ -54,6 +64,40 @@ export default function AlertsPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalAlerts, setTotalAlerts] = useState(0)
+
+  // Detections from latest PCAP analysis
+  const [pcapDetections, setPcapDetections] = useState<PcapDetectionItem[]>([])
+  const [pcapLoading, setPcapLoading] = useState(true)
+
+  const fetchLatestPcapDetections = useCallback(async () => {
+    setPcapLoading(true)
+    try {
+      const data = await flaskApi.getLastPcapAnalysis()
+      if (data && !("error" in data) && Array.isArray(data.detections)) {
+        setPcapDetections(
+          (data.detections as { id?: string; title?: string; severity?: string; description?: string; ml_source?: string }[]).map(
+            (d, i) => ({
+              id: d.id ?? `pcap-${i}`,
+              title: d.title ?? "Detection",
+              severity: (d.severity as PcapDetectionItem["severity"]) ?? "low",
+              description: d.description,
+              ml_source: d.ml_source,
+            })
+          )
+        )
+      } else {
+        setPcapDetections([])
+      }
+    } catch {
+      setPcapDetections([])
+    } finally {
+      setPcapLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchLatestPcapDetections()
+  }, [fetchLatestPcapDetections])
 
   const fetchAlertsData = async (page = 1) => {
     try {
@@ -259,6 +303,12 @@ export default function AlertsPage() {
     }
   }
 
+  const getPcapSeverityVariant = (severity: string): "destructive" | "secondary" | "default" | "outline" => {
+    if (severity === "critical" || severity === "high") return "destructive"
+    if (severity === "medium") return "default"
+    return "secondary"
+  }
+
   const handleExportAlerts = () => {
     const csvContent = [
       ['ID', 'Timestamp', 'Source IP', 'Dest IP', 'Protocol', 'Type', 'Severity', 'Description', 'Resolved'],
@@ -409,6 +459,60 @@ export default function AlertsPage() {
                 Clear All
               </Button>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Detections from PCAP */}
+        <Card className="bg-card border-border">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileSearch className="h-5 w-5" />
+              Detections from PCAP
+              {pcapLoading && <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {pcapLoading ? (
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            ) : pcapDetections.length === 0 ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-sm text-muted-foreground">No PCAP detections. Upload and analyze a PCAP to see findings here.</p>
+                <Button asChild variant="outline" size="sm" className="w-fit">
+                  <Link href="/analysis" className="flex items-center gap-2">
+                    <ExternalLink className="h-4 w-4" />
+                    Go to Analysis
+                  </Link>
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {pcapDetections.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-start gap-3 p-3 rounded-lg bg-background border border-border"
+                  >
+                    <Badge variant={getPcapSeverityVariant(d.severity)} className="shrink-0">
+                      {d.severity.toUpperCase()}
+                    </Badge>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">{d.title}</p>
+                      {d.description && (
+                        <p className="text-xs text-muted-foreground mt-0.5">{d.description}</p>
+                      )}
+                      {d.ml_source && (
+                        <span className="text-xs text-muted-foreground mt-1 inline-block">Source: {d.ml_source}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <Button asChild variant="ghost" size="sm" className="mt-2 w-fit">
+                  <Link href="/analysis" className="flex items-center gap-2 text-muted-foreground">
+                    <ExternalLink className="h-4 w-4" />
+                    View full PCAP analysis
+                  </Link>
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
 

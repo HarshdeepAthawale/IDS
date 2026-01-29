@@ -85,13 +85,13 @@ out/
 build/
 dist/
 
-# Machine Learning models
+# Machine Learning model artifacts (not the backend/models/ Python package)
 *.pkl
 *.joblib
 *.h5
 *.model
-models/
 anomaly_model.pkl
+backend/anomaly_model.pkl
 
 # Temporary files
 tmp/

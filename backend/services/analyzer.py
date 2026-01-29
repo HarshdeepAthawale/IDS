@@ -6,7 +6,7 @@ import logging
 import re
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Tuple
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
@@ -105,6 +105,13 @@ class SignatureDetector:
             Detection result or None if no threat
         """
         try:
+            # Normalize timestamp to timezone-aware before storing
+            if 'timestamp' in packet_data and packet_data['timestamp']:
+                timestamp = packet_data['timestamp']
+                if timestamp.tzinfo is None:
+                    # Naive datetime - assume UTC and make it aware
+                    packet_data['timestamp'] = timestamp.replace(tzinfo=timezone.utc)
+            
             # Add packet to recent packets for context analysis
             self.recent_packets.append(packet_data)
             
@@ -191,11 +198,19 @@ class SignatureDetector:
                 return None
             
             # Analyze recent packets for patterns
-            recent_from_src = [
-                p for p in self.recent_packets 
-                if p.get('src_ip') == src_ip and 
-                (datetime.utcnow() - p.get('timestamp', datetime.utcnow())).total_seconds() < 60
-            ]
+            current_time = datetime.now(timezone.utc)
+            recent_from_src = []
+            for p in self.recent_packets:
+                if p.get('src_ip') == src_ip:
+                    packet_timestamp = p.get('timestamp')
+                    if packet_timestamp:
+                        # Ensure timestamp is timezone-aware
+                        if packet_timestamp.tzinfo is None:
+                            # Naive datetime - assume UTC
+                            packet_timestamp = packet_timestamp.replace(tzinfo=timezone.utc)
+                        time_diff = (current_time - packet_timestamp).total_seconds()
+                        if time_diff < 60:
+                            recent_from_src.append(p)
             
             # Check for port scanning (many different ports from same IP)
             unique_ports = set(p.get('dst_port') for p in recent_from_src if p.get('dst_port'))
@@ -275,7 +290,7 @@ class AnomalyDetector:
             model_data = {
                 'model': self.model,
                 'scaler': self.scaler,
-                'timestamp': datetime.utcnow()
+                'timestamp': datetime.now(timezone.utc)
             }
             with open(self.model_path, 'wb') as f:
                 pickle.dump(model_data, f)
@@ -316,7 +331,7 @@ class AnomalyDetector:
                 features.append(0)
             
             # Time-based features
-            timestamp = packet_data.get('timestamp', datetime.utcnow())
+            timestamp = packet_data.get('timestamp', datetime.now(timezone.utc))
             if isinstance(timestamp, datetime):
                 features.append(timestamp.hour)
                 features.append(timestamp.minute)
@@ -418,7 +433,8 @@ class AnomalyDetector:
             confidence = max(0, min(1, abs(anomaly_score)))
             
             # Check against threshold
-            if is_anomaly and confidence > self.config.ANOMALY_SCORE_THRESHOLD:
+            anomaly_score_threshold = getattr(self.config, 'ANOMALY_SCORE_THRESHOLD', 0.5)
+            if is_anomaly and confidence > anomaly_score_threshold:
                 return {
                     'type': 'anomaly',
                     'signature_id': 'ml_anomaly',
@@ -452,7 +468,7 @@ class PacketAnalyzer:
         self.config = config
         self.signature_detector = SignatureDetector()
         self.anomaly_detector = AnomalyDetector(config)
-        self.last_model_training = datetime.utcnow()
+        self.last_model_training = datetime.now(timezone.utc)
         
         # Initialize classification detector if enabled
         self.classification_detector = None
@@ -565,9 +581,10 @@ class PacketAnalyzer:
                     logger.error(f"Error in classification detection: {e}")
             
             # Retrain model periodically
-            if (datetime.utcnow() - self.last_model_training).total_seconds() > self.config.MODEL_RETRAIN_INTERVAL:
+            model_retrain_interval = getattr(self.config, 'MODEL_RETRAIN_INTERVAL', 3600)
+            if (datetime.now(timezone.utc) - self.last_model_training).total_seconds() > model_retrain_interval:
                 self.anomaly_detector.train_model()
-                self.last_model_training = datetime.utcnow()
+                self.last_model_training = datetime.now(timezone.utc)
             
             return detections
             

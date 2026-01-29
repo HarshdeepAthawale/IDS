@@ -103,17 +103,90 @@ MIN_SAMPLES_FOR_TRAINING=100
 WHITELIST_IPS=127.0.0.1,10.0.0.0/8,192.168.0.0/16
 ```
 
+## Packet Capture Permissions Setup
+
+The IDS Backend requires elevated privileges to capture network packets. For production use, you need to set up packet capture permissions.
+
+### Quick Start (Development)
+
+**Option 1: Automated Setup (Recommended)**
+
+```bash
+# Make scripts executable (first time only)
+chmod +x setup_permissions.sh start.sh
+
+# Use smart startup script (automatically sets up permissions)
+./start.sh
+```
+
+**Option 2: Manual Setup**
+
+```bash
+# One-time setup
+./setup_permissions.sh
+
+# Then run normally
+python app.py
+```
+
+### Production Setup
+
+For production deployments, use the systemd service file:
+
+```bash
+# Copy service file
+sudo cp ids-backend.service /etc/systemd/system/
+
+# Edit service file to match your deployment paths
+sudo nano /etc/systemd/system/ids-backend.service
+
+# Install and start service
+sudo systemctl daemon-reload
+sudo systemctl enable ids-backend.service
+sudo systemctl start ids-backend.service
+```
+
+**See [SETUP_PERMISSIONS.md](SETUP_PERMISSIONS.md) for detailed instructions.**
+
 ## Running the Application
 
 ### Development Mode
 
+**With Permission Setup (Recommended):**
+
 ```bash
+# Use smart startup script
+./start.sh
+```
+
+**Or manually:**
+
+```bash
+# First time: Set up permissions
+./setup_permissions.sh
+
+# Then run normally
 python app.py
+```
+
+**Without Permission Setup (Requires sudo):**
+
+```bash
+sudo python app.py
 ```
 
 The server will start on `http://localhost:3002` (or the port specified in FLASK_PORT environment variable)
 
 ### Production Mode
+
+**Using Systemd Service (Recommended):**
+
+```bash
+sudo systemctl start ids-backend.service
+sudo systemctl status ids-backend.service
+```
+
+**Or manually:**
 
 ```bash
 export FLASK_ENV=production
@@ -235,18 +308,37 @@ Monitors user activities:
    export SECRET_KEY=your-production-secret-key
    ```
 
-4. **Run Application**:
+4. **Set Up Packet Capture Permissions**:
    ```bash
+   # Set up capabilities for packet capture
+   ./setup_permissions.sh
+   
+   # Or use systemd service (recommended)
+   sudo cp ids-backend.service /etc/systemd/system/
+   sudo systemctl enable ids-backend.service
+   sudo systemctl start ids-backend.service
+   ```
+
+5. **Run Application**:
+   ```bash
+   # With capabilities set up (recommended)
    python3 app.py
+   
+   # Or using systemd service
+   sudo systemctl start ids-backend.service
    ```
 
 ### Security Considerations
 
-- Run with elevated privileges for packet capture
+- **Packet Capture Permissions**: Use Linux capabilities (`cap_net_raw`, `cap_net_admin`) instead of running entire backend as root
+  - Development: Use `setup_permissions.sh` script
+  - Production: Use systemd service with `AmbientCapabilities` (see `ids-backend.service`)
 - Use HTTPS in production
 - Implement authentication/authorization
+- Run backend as dedicated non-root user (for systemd service)
 - Regular security updates
 - Monitor system resources
+- See [SETUP_PERMISSIONS.md](SETUP_PERMISSIONS.md) for detailed security guidance
 
 ## Development
 
@@ -284,9 +376,26 @@ python -c "from app import create_app; from models.db_models import db; app = cr
 ### Common Issues
 
 1. **Permission Denied for Packet Capture**:
+
+   **Quick Fix (Development):**
+   ```bash
+   # Run setup script
+   ./setup_permissions.sh
+   
+   # Then run normally
+   python app.py
+   ```
+
+   **Alternative (Requires sudo each time):**
    ```bash
    sudo python app.py
    ```
+
+   **For Production:**
+   - Use systemd service with `AmbientCapabilities` (see `ids-backend.service`)
+   - Or set capabilities on Python binary: `sudo setcap cap_net_raw,cap_net_admin=eip /path/to/python3`
+
+   **See [SETUP_PERMISSIONS.md](SETUP_PERMISSIONS.md) for detailed troubleshooting.**
 
 2. **Database Connection Errors**:
    - Check DATABASE_URL format
@@ -297,6 +406,19 @@ python -c "from app import create_app; from models.db_models import db; app = cr
    - Adjust CAPTURE_TIMEOUT
    - Reduce PACKET_RATE_THRESHOLD
    - Implement packet filtering
+
+4. **Capabilities Not Working**:
+   - Verify capabilities: `getcap /path/to/python3`
+   - Should show: `cap_net_raw,cap_net_admin=eip`
+   - Re-run setup script: `./setup_permissions.sh`
+   - Ensure using correct Python binary (check `which python3`)
+
+5. **No Packets Captured**:
+   - Verify capabilities are set correctly
+   - Check network interface: `ip link show` or `ifconfig`
+   - Verify interface in `.env`: `CAPTURE_INTERFACE=eth0` (replace with your interface)
+   - Test with network traffic: `curl http://example.com` or `ping 8.8.8.8`
+   - Check backend logs for permission errors
 
 ### Logs
 

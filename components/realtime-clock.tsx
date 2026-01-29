@@ -40,7 +40,7 @@ export default function RealtimeClock({
       {showDate && (
         <div className="text-xs text-muted-foreground">{dateString}</div>
       )}
-      <div className="text-sm text-muted-foreground font-mono">{timeString}</div>
+      <div className="text-sm text-black font-mono">{timeString}</div>
     </div>
   )
 }

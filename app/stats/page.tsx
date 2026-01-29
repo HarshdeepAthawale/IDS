@@ -119,7 +119,7 @@ export default function StatsPage() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-foreground">
-                {loading ? '...' : summary ? (summary.totalPackets / 1000000).toFixed(1) + 'M' : '0'}
+                {loading ? '...' : summary ? summary.totalPackets.toLocaleString() : '0'}
               </div>
               <p className="text-xs text-muted-foreground mt-1">Last 24 hours</p>
             </CardContent>
@@ -152,6 +152,7 @@ export default function StatsPage() {
 
         {/* Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="bg-card border-border">
             <CardHeader>
               <CardTitle>Protocol Distribution</CardTitle>
             </CardHeader>

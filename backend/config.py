@@ -46,6 +46,10 @@ class Config:
     MODEL_RETRAIN_INTERVAL = int(os.environ.get('MODEL_RETRAIN_INTERVAL', '3600'))  # 1 hour
     MIN_SAMPLES_FOR_TRAINING = int(os.environ.get('MIN_SAMPLES_FOR_TRAINING', '100'))
     
+    # PCAP analysis settings
+    PCAP_MAX_PACKETS = int(os.environ.get('PCAP_MAX_PACKETS', '2000'))  # Default packet limit for PCAP analysis
+    PCAP_ANALYSIS_TIMEOUT = int(os.environ.get('PCAP_ANALYSIS_TIMEOUT', '300'))  # 5 minutes timeout for analysis
+    
     # Supervised ML classification settings
     CLASSIFICATION_ENABLED = os.environ.get('CLASSIFICATION_ENABLED', 'False').lower() == 'true'
     CLASSIFICATION_MODEL_TYPE = os.environ.get('CLASSIFICATION_MODEL_TYPE', 'random_forest')

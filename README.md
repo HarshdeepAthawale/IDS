@@ -256,6 +256,62 @@ The system achieves high performance through optimized algorithms and feature en
 - **Automatic Retraining**: Periodic model retraining with new data
 - **Performance Monitoring**: Continuous monitoring of model performance in production
 
+## Running with Docker
+
+All services (frontend, backend, MongoDB) are included and run via Docker Compose. The frontend is configured to reach the backend over the Docker network so PCAP analysis and API proxies work without extra setup.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
+
+### Quick start
+
+```bash
+# Build and start all services
+docker compose up --build -d
+
+# Open in browser
+# Frontend: http://localhost:3000
+# Backend API: http://localhost:3002
+# MongoDB: localhost:27018 (host port; optional, for external tools)
+```
+
+Alternatively, use the startup script and choose Docker mode:
+
+```bash
+./start-all.sh
+# Select option 1 (Docker Compose)
+```
+
+### Optional: backend environment
+
+To override backend settings (e.g. MongoDB URI, thresholds), create `backend/.env` from `backend/env.example` and uncomment the `env_file` block for the `backend` service in `docker-compose.yml`.
+
+### Useful commands
+
+```bash
+# View logs
+docker compose logs -f
+
+# Stop all services
+docker compose down
+
+# Stop and remove volumes (resets MongoDB data)
+docker compose down -v
+```
+
+### Single-image run (alternative)
+
+To run frontend and backend in one container (e.g. for simple deploys):
+
+```bash
+docker build --target '' -t ids-app .
+# Requires backend/.env; backend and frontend run in same container
+docker run -p 3000:3000 -p 3002:3002 -v $(pwd)/backend/.env:/app/backend/.env:ro ids-app
+```
+
+Note: For single-image run you must run MongoDB separately or use an external MongoDB URI in `backend/.env`.
+
 ## Technology Stack
 
 ### Backend Technologies

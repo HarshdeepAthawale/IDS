@@ -63,7 +63,6 @@ def check_imports():
         from routes.alerts import alerts_bp
         from routes.stats import stats_bp
         from routes.analyze import analyze_bp
-        from routes.insider import insider_bp
         from routes.training import training_bp
         print("✓ All route blueprints imported")
     except Exception as e:
@@ -85,7 +84,7 @@ def check_app_creation():
         
         # Check if all blueprints are registered
         blueprint_names = [bp.name for bp in app.blueprints.values()]
-        expected_blueprints = ['alerts', 'stats', 'analyze', 'insider', 'training']
+        expected_blueprints = ['alerts', 'stats', 'analyze', 'training', 'pcap']
         
         for bp_name in expected_blueprints:
             if bp_name in blueprint_names:

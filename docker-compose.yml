@@ -1,4 +1,5 @@
-version: '3.8'
+# Run everything with: docker compose up -d
+# Then open http://localhost:3000 (frontend), backend API at http://localhost:3002
 
 services:
   backend:
@@ -11,45 +12,59 @@ services:
       - "3002:3002"
     environment:
       - FLASK_ENV=production
-      - DATABASE_URL=${DATABASE_URL:-sqlite:///ids.db}
-      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb:27017/}
+      - FLASK_PORT=3002
+      - MONGODB_URI=mongodb://mongodb:27017/
       - MONGODB_DATABASE_NAME=${MONGODB_DATABASE_NAME:-ids_db}
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
     volumes:
-      - ./backend:/app/backend
-      - ./backend/.env:/app/backend/.env:ro
       - ids-data:/app/backend/data
     networks:
       - ids-network
     restart: unless-stopped
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
+    command: ["python", "app.py"]
+    working_dir: /app/backend
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:3002/api/health')\" 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile
       target: frontend
+      args:
+        NEXT_PUBLIC_FLASK_API_URL: http://localhost:3002
     container_name: ids-frontend
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_FLASK_API_URL=http://backend:3002
       - NODE_ENV=production
+      # Server-side API routes use this to reach the backend (required in Docker)
+      - FLASK_API_URL=http://backend:3002
+      - NEXT_PUBLIC_FLASK_API_URL=http://localhost:3002
     networks:
       - ids-network
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    command: ["npm", "start"]
+    working_dir: /app
 
   mongodb:
     image: mongo:7.0
     container_name: ids-mongodb
     ports:
-      - "27017:27017"
+      - "27018:27017"   # host 27018 to avoid conflict with local MongoDB on 27017
     volumes:
       - mongodb-data:/data/db
     networks:
@@ -57,6 +72,12 @@ services:
     restart: unless-stopped
     environment:
       - MONGO_INITDB_DATABASE=ids_db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
 volumes:
   ids-data:
