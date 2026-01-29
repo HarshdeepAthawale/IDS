@@ -16,6 +16,10 @@ services:
       - MONGODB_URI=mongodb://mongodb:27017/
       - MONGODB_DATABASE_NAME=${MONGODB_DATABASE_NAME:-ids_db}
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      # Pre-trained SecIDS-CNN by default (model in image at /app/backend/SecIDS-CNN/). Set to false/random_forest to use internal ML/dataset.
+      - CLASSIFICATION_ENABLED=${CLASSIFICATION_ENABLED:-true}
+      - CLASSIFICATION_MODEL_TYPE=${CLASSIFICATION_MODEL_TYPE:-secids_cnn}
+      # - SECIDS_MODEL_PATH=  # optional; default is /app/backend/SecIDS-CNN/SecIDS-CNN.h5
     volumes:
       - ids-data:/app/backend/data
     networks:

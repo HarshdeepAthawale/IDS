@@ -53,7 +53,7 @@ def check_imports():
         return False
     
     try:
-        from services.classifier import ClassificationDetector
+        from services.classifier import get_classification_detector
         print("✓ Classification detector imported")
     except Exception as e:
         print(f"✗ Failed to import classifier: {e}")
@@ -107,11 +107,20 @@ def check_model_loading():
     
     try:
         from config import DevelopmentConfig
-        from services.classifier import ClassificationDetector
+        from services.classifier import get_classification_detector
         
         config = DevelopmentConfig()
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         
+        if getattr(classifier, 'model_type', None) == 'secids_cnn':
+            if classifier.is_trained:
+                print("✓ SecIDS-CNN pre-trained model loaded successfully")
+                print(f"  Model path: {getattr(classifier, 'model_path', 'N/A')}")
+                return True
+            print("⚠ SecIDS-CNN model not loaded.")
+            print("  1. Install TensorFlow: pip install tensorflow")
+            print("  2. Place SecIDS-CNN.h5 at SecIDS-CNN/SecIDS-CNN.h5 (repo root) or set SECIDS_MODEL_PATH.")
+            return True
         if classifier.model is not None:
             print("✓ Model loaded successfully")
             print(f"  Model type: {classifier.model_type}")

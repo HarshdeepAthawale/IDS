@@ -27,9 +27,8 @@ except ImportError:
     logging.getLogger('pymongo.pool').setLevel(logging.CRITICAL)
 
 from config import Config
-from services.data_collector import DataCollector
 from services.preprocessor import DataPreprocessor
-from services.classifier import ClassificationDetector
+from services.classifier import get_classification_detector
 from services.model_trainer import ModelTrainer
 from services.model_evaluator import ModelEvaluator
 from datetime import datetime
@@ -42,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def check_sufficient_samples(data_collector: DataCollector, min_samples: int = 1000) -> bool:
+def check_sufficient_samples(data_collector, min_samples: int = 1000) -> bool:
     """Check if sufficient training samples exist"""
     try:
         stats = data_collector.get_statistics()
@@ -136,6 +135,21 @@ def train_model(hyperparameter_tuning: bool = False) -> bool:
         
         # Load configuration
         config = Config()
+        if getattr(config, 'CLASSIFICATION_MODEL_TYPE', None) == 'secids_cnn':
+            logger.info("Using pre-trained SecIDS-CNN; no training from CICIDS2018 dataset needed.")
+            return True
+        
+        # Check if we have preprocessed JSON (no MongoDB needed)
+        json_file = Path(__file__).parent.parent / 'data' / 'cicids2018_preprocessed_50k.json'
+        use_json_only = json_file.exists()
+        if use_json_only:
+            logger.info(f"Using preprocessed JSON: {json_file} (no MongoDB required)")
+            data_collector = None
+            total_samples = 50000  # 50k subset
+        else:
+            from services.data_collector import DataCollector
+            data_collector = DataCollector(config)
+            total_samples = data_collector.get_statistics().get('total_samples', 0)
         
         # Check if classification is enabled
         if not getattr(config, 'CLASSIFICATION_ENABLED', False):
@@ -144,24 +158,18 @@ def train_model(hyperparameter_tuning: bool = False) -> bool:
         
         # Initialize services
         logger.info("Initializing services...")
-        data_collector = DataCollector(config)
         preprocessor = DataPreprocessor(config)
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         model_trainer = ModelTrainer(config, classifier, preprocessor, data_collector)
         
-        # Check sufficient samples (but allow training from JSON file even if DB check fails)
-        min_samples = getattr(config, 'MIN_TRAINING_SAMPLES_CLASSIFICATION', 1000)
-        db_check_passed = check_sufficient_samples(data_collector, min_samples)
-        if not db_check_passed:
-            logger.warning("Database check failed, but will attempt to load from JSON file...")
-            # Don't return False - allow training to proceed with JSON file
-        
-        # Check memory requirements
-        available_mem, estimated_mem = check_memory_requirements(config, data_collector)
-        
-        # Get dataset statistics
-        stats = data_collector.get_statistics()
-        total_samples = stats.get('total_samples', 0)
+        # Check sufficient samples when using MongoDB (skip when using JSON)
+        if not use_json_only:
+            min_samples = getattr(config, 'MIN_TRAINING_SAMPLES_CLASSIFICATION', 1000)
+            db_check_passed = check_sufficient_samples(data_collector, min_samples)
+            if not db_check_passed:
+                logger.warning("Database check failed, but will attempt to load from JSON file...")
+            # Check memory requirements
+            check_memory_requirements(config, data_collector)
         
         # Estimate training time
         hours, minutes = estimate_training_time(total_samples, hyperparameter_tuning)

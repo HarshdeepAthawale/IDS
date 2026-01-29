@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
     from config import DevelopmentConfig
     from services.analyzer import PacketAnalyzer, AnomalyDetector
-    from services.classifier import ClassificationDetector
+    from services.classifier import get_classification_detector
 except ImportError as e:
     print(f"Error: Missing required dependencies. Please install them:")
     print(f"  pip install -r requirements.txt")
@@ -37,14 +37,16 @@ def test_classification_model():
     
     try:
         config = DevelopmentConfig()
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         
         if not classifier.is_trained:
             logger.warning("⚠ Classification model is not trained!")
             return False
         
         logger.info(f"✓ Model loaded: {classifier.model_type}")
-        logger.info(f"✓ Model expects {classifier.model.n_features_in_} features")
+        n_feat = getattr(classifier, 'n_features_in_', None) or getattr(getattr(classifier, 'model', None), 'n_features_in_', None)
+        if n_feat is not None:
+            logger.info(f"✓ Model expects {n_feat} features")
         
         # Test classification with sample features
         test_features = {

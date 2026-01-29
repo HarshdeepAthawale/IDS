@@ -98,16 +98,23 @@ def create_app(config_name='default'):
     init_analyze_services(analyzer, logger_service)
     init_pcap_services(app.config, packet_analyzer=analyzer)
     
-    # Initialize training services if classification is enabled
+    # Initialize training services if classification is enabled (SecIDS-CNN only needs FeatureExtractor)
     training_data_collector = None
     training_feature_extractor = None
     if getattr(app.config, 'CLASSIFICATION_ENABLED', False):
         try:
-            from services.data_collector import DataCollector
             from services.feature_extractor import FeatureExtractor
-            
-            training_data_collector = DataCollector(app.config)
             training_feature_extractor = FeatureExtractor(app.config)
+            use_secids = getattr(app.config, 'CLASSIFICATION_MODEL_TYPE', None) == 'secids_cnn'
+            if not use_secids:
+                from services.data_collector import DataCollector
+                training_data_collector = DataCollector(app.config)
+            else:
+                try:
+                    from services.data_collector import DataCollector
+                    training_data_collector = DataCollector(app.config)
+                except Exception:
+                    training_data_collector = None
             init_training_services(training_data_collector, training_feature_extractor, app.config)
         except Exception as e:
             logger.warning(f"Could not initialize training services: {e}")
@@ -262,11 +269,17 @@ def create_app(config_name='default'):
         # Check analyzer status
         analyzer_stats = app.analyzer.get_model_stats()
         analyzer_status = 'active' if analyzer_stats.get('is_trained', False) else 'training'
+        classification = analyzer_stats.get('classification', {})
+        secids_active = (
+            classification.get('enabled') and
+            classification.get('is_trained', False) and
+            classification.get('model_type') == 'secids_cnn'
+        )
         
-        # Overall system status
+        # Overall system status: when SecIDS is active and trained, report healthy even if MongoDB is down (SecIDS-only mode)
         overall_status = 'healthy'
         if db_status != 'connected':
-            overall_status = 'degraded'
+            overall_status = 'healthy' if secids_active else 'degraded'
         elif sniffer_status in ['degraded', 'warning']:
             overall_status = 'degraded'
         

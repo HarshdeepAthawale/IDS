@@ -65,6 +65,17 @@ backend/
    ```
    This will generate synthetic packet data and train the Isolation Forest model for anomaly detection. The model will also auto-train when enough real packet data is collected (100+ samples).
 
+### Running tests
+
+Minimal API tests (health, model-info) use pytest. From the `backend` directory:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
+```
+
+Requires full dependencies (including TensorFlow if using SecIDS-CNN). In Docker: `docker compose exec backend python -m pytest tests/ -v`.
+
 ## Configuration
 
 ### Environment Variables
@@ -99,9 +110,18 @@ MAX_ALERTS_PER_HOUR=100
 MODEL_RETRAIN_INTERVAL=3600
 MIN_SAMPLES_FOR_TRAINING=100
 
+# Optional: SecIDS-CNN pre-trained classifier (set CLASSIFICATION_MODEL_TYPE=secids_cnn)
+# Requires TensorFlow and SecIDS-CNN.h5; see docs/SECIDS_CNN.md
+# CLASSIFICATION_MODEL_TYPE=random_forest   # or secids_cnn
+# SECIDS_MODEL_PATH=   # optional path to SecIDS-CNN.h5
+
 # Whitelist IPs (comma-separated)
 WHITELIST_IPS=127.0.0.1,10.0.0.0/8,192.168.0.0/16
 ```
+
+### SecIDS-CNN (optional)
+
+To use the pre-trained SecIDS-CNN model instead of the trainable sklearn classifier, set `CLASSIFICATION_MODEL_TYPE=secids_cnn` and `CLASSIFICATION_ENABLED=true`. You must install TensorFlow and place `SecIDS-CNN.h5` (from [Hugging Face](https://huggingface.co/Keyven/SecIDS-CNN)) at `SecIDS-CNN/SecIDS-CNN.h5` or set `SECIDS_MODEL_PATH`. See [docs/SECIDS_CNN.md](docs/SECIDS_CNN.md) for setup and feature mapping.
 
 ## Packet Capture Permissions Setup
 

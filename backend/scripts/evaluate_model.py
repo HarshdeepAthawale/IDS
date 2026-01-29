@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import Config
 from services.data_collector import DataCollector
 from services.preprocessor import DataPreprocessor
-from services.classifier import ClassificationDetector
+from services.classifier import get_classification_detector
 from services.model_trainer import ModelTrainer
 from services.model_evaluator import ModelEvaluator
 
@@ -63,7 +63,7 @@ def evaluate_model(model_path: str, output_dir: str = None) -> bool:
         logger.info("Initializing services...")
         data_collector = DataCollector(config)
         preprocessor = DataPreprocessor(config)
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         
         # Check if model is loaded
         if not classifier.is_trained:

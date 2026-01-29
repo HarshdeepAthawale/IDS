@@ -6,7 +6,7 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_FLASK_API_URL ||
   "http://localhost:3002"
 
-// Allow large uploads and long analysis (e.g. 40MB+ PCAP); backend has 5min timeout
+// Allow large uploads and long analysis (up to 100MB PCAP); backend has 5min timeout
 const PROXY_TIMEOUT_MS = 6 * 60 * 1000
 
 export async function POST(request: Request) {

@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for IDS Backend and Frontend
 
 # Stage 1: Backend
-FROM python:3.12-slim as backend
+FROM python:3.12-slim AS backend
 
 WORKDIR /app/backend
 
@@ -19,11 +19,14 @@ RUN pip install --upgrade pip && \
 # Copy backend code
 COPY backend/ .
 
+# Copy SecIDS-CNN model (for CLASSIFICATION_MODEL_TYPE=secids_cnn)
+COPY SecIDS-CNN ./SecIDS-CNN
+
 # Expose backend port
 EXPOSE 3002
 
 # Stage 2: Frontend
-FROM node:20-alpine as frontend
+FROM node:20-alpine AS frontend
 
 WORKDIR /app
 

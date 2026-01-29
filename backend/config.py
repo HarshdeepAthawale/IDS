@@ -50,9 +50,11 @@ class Config:
     PCAP_MAX_PACKETS = int(os.environ.get('PCAP_MAX_PACKETS', '2000'))  # Default packet limit for PCAP analysis
     PCAP_ANALYSIS_TIMEOUT = int(os.environ.get('PCAP_ANALYSIS_TIMEOUT', '300'))  # 5 minutes timeout for analysis
     
-    # Supervised ML classification settings
-    CLASSIFICATION_ENABLED = os.environ.get('CLASSIFICATION_ENABLED', 'False').lower() == 'true'
-    CLASSIFICATION_MODEL_TYPE = os.environ.get('CLASSIFICATION_MODEL_TYPE', 'random_forest')
+    # Supervised ML classification settings (default: pre-trained SecIDS-CNN only; no internal dataset)
+    CLASSIFICATION_ENABLED = os.environ.get('CLASSIFICATION_ENABLED', 'True').lower() == 'true'
+    CLASSIFICATION_MODEL_TYPE = os.environ.get('CLASSIFICATION_MODEL_TYPE', 'secids_cnn')  # secids_cnn (default), random_forest, etc.
+    # SecIDS-CNN pre-trained model (optional); used when CLASSIFICATION_MODEL_TYPE == 'secids_cnn'
+    SECIDS_MODEL_PATH = os.environ.get('SECIDS_MODEL_PATH') or None  # None = resolve to project_root/SecIDS-CNN/SecIDS-CNN.h5
     MIN_TRAINING_SAMPLES_CLASSIFICATION = int(os.environ.get('MIN_TRAINING_SAMPLES_CLASSIFICATION', '1000'))
     TRAIN_TEST_SPLIT_RATIO = float(os.environ.get('TRAIN_TEST_SPLIT_RATIO', '0.7'))
     HYPERPARAMETER_TUNING_ENABLED = os.environ.get('HYPERPARAMETER_TUNING_ENABLED', 'False').lower() == 'true'
@@ -130,9 +132,11 @@ class ProductionConfig(Config):
 class TestingConfig(Config):
     """Testing configuration"""
     TESTING = True
-    MONGODB_URI = 'mongodb://localhost:27017/'
+    MONGODB_URI = os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017/'
     MONGODB_DATABASE_NAME = 'ids_test_db'
     WTF_CSRF_ENABLED = False
+    # Do not start packet sniffer during tests
+    SCAPY_AUTO_START = False
 
 # Configuration dictionary
 config = {

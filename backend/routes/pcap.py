@@ -63,8 +63,8 @@ def analyze_pcap():
                 "details": f"File must be .pcap or .pcapng, got {file_ext}"
             }), 400
 
-        # Validate file size (50MB limit)
-        MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+        # Validate file size (100MB limit)
+        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
         file.seek(0, os.SEEK_END)
         file_size = file.tell()
         file.seek(0)
@@ -72,7 +72,7 @@ def analyze_pcap():
         if file_size > MAX_FILE_SIZE:
             return jsonify({
                 "error": "File too large",
-                "details": f"File size ({file_size / (1024 * 1024):.1f}MB) exceeds maximum allowed size (50MB)"
+                "details": f"File size ({file_size / (1024 * 1024):.1f}MB) exceeds maximum allowed size (100MB)"
             }), 400
 
         if file_size == 0:

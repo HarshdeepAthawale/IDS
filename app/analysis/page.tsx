@@ -37,6 +37,8 @@ interface PcapRisk {
   score?: number
   level?: "low" | "medium" | "high" | "critical"
   rationale?: string[]
+  risk_source?: "classification" | "severity" | "unavailable"
+  classification_model_type?: string
 }
 
 interface PcapModelInfo {
@@ -49,6 +51,7 @@ interface PcapModelInfo {
     enabled?: boolean
     trained?: boolean
   }
+  classification_model_type?: string | null
   detection_counts?: {
     signature?: number
     anomaly?: number
@@ -88,7 +91,7 @@ function AnalysisPageContent() {
   const [pcapError, setPcapError] = useState<string | null>(null)
   const [pcapProgress, setPcapProgress] = useState(0)
 
-  const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
+  const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
   const validatePcapFile = (file: File): string | null => {
     const validExtensions = ['.pcap', '.pcapng']
     const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'))
@@ -98,7 +101,7 @@ function AnalysisPageContent() {
     }
 
     if (file.size > MAX_FILE_SIZE) {
-      return `File size exceeds ${MAX_FILE_SIZE / (1024 * 1024)}MB limit. Please upload a smaller file.`
+      return `File size exceeds 100MB limit. Please upload a smaller file.`
     }
 
     if (file.size === 0) {
@@ -214,7 +217,7 @@ Detections: ${pcapResult.detections?.length ?? 0}
 ${pcapResult.metadata?.model_info?.ml_enabled ? `
 ML Models:
 - Anomaly Detector: ${pcapResult.metadata.model_info.anomaly_detector?.trained ? 'Trained ✓' : 'Not Trained ✗'}
-- Classification Detector: ${pcapResult.metadata.model_info.classification_detector?.enabled ? (pcapResult.metadata.model_info.classification_detector?.trained ? 'Trained ✓' : 'Not Trained ✗') : 'Not Enabled'}
+- Classification: ${pcapResult.metadata.model_info.classification_model_type === 'secids_cnn' ? 'SecIDS-CNN' : 'Classifier'} ${pcapResult.metadata.model_info.classification_detector?.enabled ? (pcapResult.metadata.model_info.classification_detector?.trained ? '✓' : '✗') : 'Not Enabled'}
 - Average Confidence: ${pcapResult.metadata.model_info.average_confidence ? (pcapResult.metadata.model_info.average_confidence * 100).toFixed(1) + '%' : 'N/A'}
 ` : ''}
 `
@@ -274,7 +277,7 @@ ML Models:
                       Selected: <span className="font-medium">{pcapFile.name}</span> ({formatFileSize(pcapFile.size)})
                     </span>
                   ) : (
-                    "Max ~1800 packets processed for speed. Supports .pcap and .pcapng files (max 50MB)."
+                    "Max ~1800 packets processed for speed. Supports .pcap and .pcapng files (max 100MB)."
                   )}
                 </p>
               </div>
@@ -358,6 +361,15 @@ ML Models:
                         {(pcapResult.risk?.level || "low").toUpperCase()}
                       </Badge>
                     </div>
+                    <div className="text-[10px] text-muted-foreground mt-1">
+                      {pcapResult.risk?.risk_source === "classification"
+                        ? (pcapResult.risk?.classification_model_type === "secids_cnn"
+                          ? "SecIDS-CNN classification risk (0–100)."
+                          : "Classification model risk (0–100).")
+                        : pcapResult.risk?.risk_source === "unavailable"
+                          ? "Enable SecIDS-CNN for ML risk score."
+                          : "Baseline + severity per detection (0–100)."}
+                    </div>
                   </div>
                   <div className="p-3 rounded-lg border border-border bg-background">
                     <div className="text-xs text-muted-foreground mb-1">Total Packets</div>
@@ -376,10 +388,13 @@ ML Models:
                       {pcapResult.metadata?.model_info?.detection_counts ? (
                         <>
                           ML: {(pcapResult.metadata.model_info.detection_counts.anomaly ?? 0) + (pcapResult.metadata.model_info.detection_counts.classification ?? 0)} |
-                          Heuristic: {pcapResult.metadata.model_info.detection_counts.signature || 0}
+                          Heuristic: {pcapResult.metadata.model_info.detection_counts.signature ?? 0}
+                          {!pcapResult.metadata?.model_info?.ml_enabled && (
+                            <span className="block mt-0.5 text-muted-foreground/80">Traditional rules only · ML planned</span>
+                          )}
                         </>
                       ) : (
-                        "All heuristic"
+                        "Traditional heuristics"
                       )}
                     </div>
                   </div>
@@ -396,7 +411,10 @@ ML Models:
                           {pcapResult.metadata.model_info.classification_detector?.enabled && (
                             <div className="flex items-center gap-1 text-xs">
                               <Badge variant={pcapResult.metadata.model_info.classification_detector?.trained ? "default" : "secondary"} className="text-[10px]">
-                                Classify {pcapResult.metadata.model_info.classification_detector?.trained ? "✓" : "✗"}
+                                {pcapResult.metadata.model_info.classification_model_type === "secids_cnn"
+                                  ? "SecIDS-CNN"
+                                  : "Classify"}{" "}
+                                {pcapResult.metadata.model_info.classification_detector?.trained ? "✓" : "✗"}
                               </Badge>
                             </div>
                           )}
@@ -407,7 +425,7 @@ ML Models:
                           )}
                         </>
                       ) : (
-                        <div className="text-xs text-muted-foreground">Not enabled</div>
+                        <div className="text-xs text-muted-foreground">Traditional only · ML integration planned</div>
                       )}
                     </div>
                   </div>

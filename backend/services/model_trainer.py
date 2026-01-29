@@ -15,7 +15,6 @@ from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from services.classifier import ClassificationDetector
 from services.preprocessor import DataPreprocessor
-from services.data_collector import DataCollector
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,7 @@ class ModelTrainer:
     """
     
     def __init__(self, config, classifier: ClassificationDetector,
-                 preprocessor: DataPreprocessor, data_collector: DataCollector):
+                 preprocessor: DataPreprocessor, data_collector: Optional[Any] = None):
         """
         Initialize model trainer
         
@@ -256,6 +255,11 @@ class ModelTrainer:
                 return df, None
             
             # Fallback to MongoDB loading
+            if self.data_collector is None:
+                raise ValueError(
+                    "No preprocessed JSON file found and data_collector is None. "
+                    "Place cicids2018_preprocessed_50k.json in backend/data/ or provide a DataCollector."
+                )
             # Check if batch loading is enabled
             # Temporarily disable batch loading due to SSL issues with Python 3.14
             batch_loading = False  # getattr(self.config, 'BATCH_LOADING_ENABLED', False)
@@ -400,6 +404,18 @@ class ModelTrainer:
             Dictionary with training results
         """
         try:
+            # SecIDS-CNN is pre-trained; skip training
+            if getattr(self.classifier, 'model_type', None) == 'secids_cnn':
+                logger.info("SecIDS-CNN is a pre-trained model; training is not performed.")
+                return {
+                    'model_type': 'secids_cnn',
+                    'training_samples': 0,
+                    'validation_samples': 0,
+                    'test_samples': 0,
+                    'training_time': 0.0,
+                    'message': 'SecIDS-CNN is pre-trained. Use evaluation endpoints to assess performance.',
+                    'test_metrics': {}
+                }
             start_time = datetime.utcnow()
             
             # Load training data

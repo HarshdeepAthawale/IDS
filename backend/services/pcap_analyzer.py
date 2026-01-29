@@ -138,7 +138,7 @@ class PcapAnalyzer:
         logger.info(f"Total detections: {len(all_detections)} (after dedup from {len(combined)}: {len(heuristic_detections)} heuristic, {len(ml_detections)} ML)")
         
         try:
-            risk = self._score_risk(all_detections, summary)
+            risk = self._score_risk(all_detections, summary, model_metadata)
         except Exception as e:
             logger.error(f"Error scoring risk: {e}")
             # Return minimal risk score based on actual detections count, not mock data
@@ -150,6 +150,14 @@ class PcapAnalyzer:
 
         processing_ms = round((time.time() - start) * 1000, 2)
         logger.info(f"PCAP analysis completed in {processing_ms}ms")
+
+        # Ensure detection_counts always reflects reality: heuristic (traditional) detections
+        # count as "signature", so the UI shows "Heuristic: N" correctly when using traditional-only.
+        if "detection_counts" not in model_metadata:
+            model_metadata["detection_counts"] = {"signature": 0, "anomaly": 0, "classification": 0}
+        model_metadata["detection_counts"]["signature"] = (
+            model_metadata["detection_counts"].get("signature", 0) + len(heuristic_detections)
+        )
 
         # Return ONLY real analysis results from the PCAP file - NO mock data
         # All data comes from actual packet analysis, ML models, or empty arrays if no data found
@@ -439,35 +447,64 @@ class PcapAnalyzer:
             out.append(d_copy)
         return out
 
-    def _score_risk(self, detections: List[Dict[str, Any]], summary: Dict[str, Any]) -> Dict[str, Any]:
-        severity_weights = {"critical": 30, "high": 20, "medium": 12, "low": 5}
-        score = 10  # baseline
+    def _score_risk(
+        self,
+        detections: List[Dict[str, Any]],
+        summary: Dict[str, Any],
+        model_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compute risk score only from classification (e.g. SecIDS-CNN).
+        When classification is enabled, trained, and has confidence scores,
+        risk = mean(malicious probability) scaled 0–100. No fallback formula:
+        when ML scores are unavailable, return risk_source "unavailable".
+        """
         rationale = []
+        classification_enabled = False
+        classification_trained = False
+        confidence_scores = []
+        classification_model_type = "unknown"
+        if model_metadata:
+            cd = model_metadata.get("classification_detector") or {}
+            classification_enabled = cd.get("enabled", False)
+            classification_trained = cd.get("trained", False)
+            confidence_scores = model_metadata.get("confidence_scores") or []
+            classification_model_type = model_metadata.get("classification_model_type", "unknown")
 
-        for detection in detections:
-            score += severity_weights.get(detection.get("severity", "low"), 5)
-            rationale.append(detection.get("title", "Detection identified"))
+        # Risk only from SecIDS-CNN / classification when enabled, trained, and we have confidence
+        if classification_enabled and classification_trained and confidence_scores:
+            # Malicious probability (0–1) -> risk score (0–100); use mean confidence
+            mean_conf = sum(confidence_scores) / len(confidence_scores)
+            score = round(mean_conf * 100)
+            score = max(0, min(100, score))
+            model_label = "SecIDS-CNN" if classification_model_type == "secids_cnn" else "Classification"
+            rationale.append(f"{model_label} malicious confidence (avg {mean_conf:.2f})")
+            for d in detections[:4]:
+                rationale.append(d.get("title", "Detection identified"))
+            if score >= 80:
+                level = "critical"
+            elif score >= 65:
+                level = "high"
+            elif score >= 40:
+                level = "medium"
+            else:
+                level = "low"
+            return {
+                "score": int(score),
+                "level": level,
+                "rationale": rationale[:6],
+                "risk_source": "classification",
+                "classification_model_type": classification_model_type,
+            }
 
-        # Add slight bump for long durations or heavy traffic
-        if summary["duration_seconds"] > 600:
-            score += 5
-            rationale.append("Capture window spans >10 minutes.")
-        if summary["total_bytes"] > 10_000_000:
-            score += 5
-            rationale.append("High byte volume observed.")
-
-        score = max(0, min(100, score))
-
-        if score >= 80:
-            level = "critical"
-        elif score >= 65:
-            level = "high"
-        elif score >= 40:
-            level = "medium"
-        else:
-            level = "low"
-
-        return {"score": int(score), "level": level, "rationale": rationale[:6]}
+        # No ML scores: do not use baseline/severity fallback. Report unavailable.
+        rationale.append("Classification model not available or not used. Enable SecIDS-CNN for ML risk score.")
+        return {
+            "score": 0,
+            "level": "low",
+            "rationale": rationale[:6],
+            "risk_source": "unavailable",
+        }
 
     def _scapy_to_packet_data(self, pkt) -> Optional[Dict[str, Any]]:
         """
@@ -592,6 +629,7 @@ class PcapAnalyzer:
                 "enabled": False,  # Real status from model, not mock
                 "trained": False,  # Real status from model, not mock
             },
+            "classification_model_type": None,  # secids_cnn, random_forest, etc.
             "detection_counts": {
                 "signature": 0,  # Will be incremented with real detections
                 "anomaly": 0,  # Will be incremented with real detections
@@ -613,12 +651,17 @@ class PcapAnalyzer:
                 logger.warning(f"Could not check anomaly detector status: {e}")
                 model_metadata["anomaly_detector"]["enabled"] = False
             
+            classification_model_type = "unknown"
             try:
                 classification_enabled = self.packet_analyzer.classification_detector is not None
                 if classification_enabled:
                     classification_trained = getattr(self.packet_analyzer.classification_detector, 'is_trained', False)
+                    classification_model_type = getattr(
+                        self.packet_analyzer.classification_detector, 'model_type', 'random_forest'
+                    )
                     model_metadata["classification_detector"]["enabled"] = True
                     model_metadata["classification_detector"]["trained"] = classification_trained
+                    model_metadata["classification_model_type"] = classification_model_type
             except AttributeError as e:
                 logger.warning(f"Could not check classification detector status: {e}")
                 model_metadata["classification_detector"]["enabled"] = False
@@ -645,6 +688,26 @@ class PcapAnalyzer:
                 # Run through PacketAnalyzer
                 detections = self.packet_analyzer.analyze_packet(packet_data)
                 
+                # Always record SecIDS/classification malicious probability for risk (even when no detection)
+                if classification_enabled and classification_trained:
+                    try:
+                        fe = getattr(self.packet_analyzer, 'feature_extractor', None)
+                        cd = getattr(self.packet_analyzer, 'classification_detector', None)
+                        if fe and cd:
+                            features = fe.extract_features(packet_data)
+                            result = cd.classify(features)
+                            probs = result.get('probabilities') or {}
+                            p_mal = probs.get('malicious')
+                            if p_mal is None and result.get('label') == 'malicious':
+                                p_mal = result.get('confidence', 0.5)
+                            elif p_mal is None:
+                                p_mal = 1.0 - (result.get('confidence') or 0.5)
+                            if p_mal is not None:
+                                model_metadata["confidence_scores"].append(float(p_mal))
+                    except Exception as e:
+                        if error_count <= max_errors:
+                            logger.debug(f"Classification prob for risk: {e}")
+                
                 for detection in detections:
                     detection_type = detection.get('type', 'signature')
                     source = detection.get('source', 'unknown')
@@ -659,7 +722,7 @@ class PcapAnalyzer:
                     
                     model_metadata["detection_counts"][detection_type] += 1
                     
-                    # Collect confidence scores
+                    # Collect confidence scores from detections (duplicates what we added above for classification)
                     if 'confidence' in detection:
                         model_metadata["confidence_scores"].append(detection['confidence'])
                     
@@ -676,7 +739,7 @@ class PcapAnalyzer:
                             "protocol": packet_data.get('protocol'),
                             "detection_type": detection_type,
                             "model_type": "Isolation Forest" if detection_type == 'anomaly' else 
-                                         ("Random Forest" if classification_enabled else "Unknown"),
+                                         (classification_model_type if classification_enabled else "Unknown"),
                         },
                         "mitre": detection.get('mitre'),
                         "ml_source": detection_type,

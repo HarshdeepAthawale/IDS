@@ -31,3 +31,7 @@ seaborn>=0.13.0
 
 # Optional: AWS (boto3)
 boto3>=1.34.0
+
+# Optional: SecIDS-CNN pre-trained classifier (CLASSIFICATION_MODEL_TYPE=secids_cnn)
+# Python 3.12+ needs TensorFlow 2.16+; 2.11–2.15 require Python <3.12
+tensorflow>=2.16.0

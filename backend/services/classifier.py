@@ -13,6 +13,8 @@ from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
+logger = logging.getLogger(__name__)
+
 # Try to import XGBoost (optional dependency)
 try:
     import xgboost as xgb
@@ -21,7 +23,17 @@ except ImportError:
     XGBOOST_AVAILABLE = False
     logger.warning("XGBoost not available. Install with: pip install xgboost")
 
-logger = logging.getLogger(__name__)
+
+def get_classification_detector(config):
+    """
+    Factory: return ClassificationDetector or SecIDSClassifierAdapter based on config.
+    Use when CLASSIFICATION_MODEL_TYPE == 'secids_cnn' for the pre-trained SecIDS-CNN model.
+    """
+    model_type = getattr(config, 'CLASSIFICATION_MODEL_TYPE', None) or (config.get('CLASSIFICATION_MODEL_TYPE') if hasattr(config, 'get') else None) or 'random_forest'
+    if model_type == 'secids_cnn':
+        from services.secids_adapter import SecIDSClassifierAdapter
+        return SecIDSClassifierAdapter(config)
+    return ClassificationDetector(config)
 
 
 class ClassificationDetector:

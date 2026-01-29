@@ -1,13 +1,12 @@
 """
 Training data management API routes
-Provides endpoints for labeling, retrieving, and managing training data
+Provides endpoints for labeling, retrieving, and managing training data.
+When using pre-trained SecIDS-CNN only, dataset/MongoDB endpoints return friendly messages.
 """
 
 import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify
-from services.data_collector import DataCollector
-from services.feature_extractor import FeatureExtractor
+from flask import Blueprint, request, jsonify, current_app
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,29 @@ def init_services(collector_instance, extractor_instance, config=None):
     app_config = config
 
 
+def _using_secids_only():
+    """True when using pre-trained SecIDS-CNN (no internal dataset/MongoDB for classification)."""
+    config = app_config
+    if config is None:
+        try:
+            config = current_app.config
+        except Exception:
+            return False
+    if config is None:
+        return False
+    model_type = getattr(config, 'CLASSIFICATION_MODEL_TYPE', None) or (config.get('CLASSIFICATION_MODEL_TYPE') if hasattr(config, 'get') else None)
+    return model_type == 'secids_cnn'
+
+
+def _secids_no_dataset_response():
+    """Return (response, status_code) for SecIDS-only when dataset/MongoDB not used, or None."""
+    if _using_secids_only() and data_collector is None:
+        return jsonify({'message': 'SecIDS-CNN is pre-trained and does not use MongoDB training data.'}), 200
+    if data_collector is None:
+        return jsonify({'error': 'Training data service not available.'}), 503
+    return None
+
+
 @training_bp.route('/api/training/label', methods=['POST'])
 def label_sample():
     """
@@ -43,6 +65,9 @@ def label_sample():
     Returns:
     JSON response with success status
     """
+    r = _secids_no_dataset_response()
+    if r is not None:
+        return r
     try:
         data = request.get_json()
         if not data:
@@ -94,6 +119,11 @@ def get_training_data():
     Returns:
     JSON response with training samples
     """
+    r = _secids_no_dataset_response()
+    if r is not None:
+        if r[1] == 200:
+            return jsonify(samples=[], count=0, message='SecIDS-CNN is pre-trained and does not use MongoDB training data.'), 200
+        return r
     try:
         label = request.args.get('label')
         limit = int(request.args.get('limit', 1000))
@@ -154,6 +184,11 @@ def get_unlabeled_data():
     Returns:
     JSON response with unlabeled samples
     """
+    r = _secids_no_dataset_response()
+    if r is not None:
+        if r[1] == 200:
+            return jsonify(samples=[], count=0, limit=100, message='SecIDS-CNN is pre-trained and does not use MongoDB training data.'), 200
+        return r
     try:
         limit = int(request.args.get('limit', 100))
         
@@ -207,6 +242,9 @@ def import_dataset():
     Returns:
     JSON response with import results
     """
+    r = _secids_no_dataset_response()
+    if r is not None:
+        return r
     try:
         data = request.get_json()
         if not data:
@@ -243,6 +281,9 @@ def delete_sample(sample_id):
     Returns:
         JSON response with success status
     """
+    r = _secids_no_dataset_response()
+    if r is not None:
+        return r
     try:
         success = data_collector.delete_sample(sample_id)
         
@@ -268,6 +309,11 @@ def get_statistics():
     Returns:
     JSON response with statistics
     """
+    r = _secids_no_dataset_response()
+    if r is not None:
+        if r[1] == 200:
+            return jsonify(message='SecIDS-CNN is pre-trained and does not use MongoDB training data.', stats={}), 200
+        return r
     try:
         stats = data_collector.get_statistics()
         return jsonify(stats)
@@ -291,7 +337,7 @@ def train_model():
     JSON response with training results
     """
     try:
-        from services.classifier import ClassificationDetector
+        from services.classifier import get_classification_detector
         from services.preprocessor import DataPreprocessor
         from services.model_trainer import ModelTrainer
         
@@ -302,7 +348,7 @@ def train_model():
         from flask import current_app
         config = app_config or current_app.config
         
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         preprocessor = DataPreprocessor(config)
         trainer = ModelTrainer(config, classifier, preprocessor, data_collector)
         
@@ -327,8 +373,13 @@ def evaluate_model():
     Returns:
     JSON response with evaluation metrics
     """
+    if _using_secids_only():
+        return jsonify({
+            'message': 'SecIDS-CNN is pre-trained; evaluation against internal dataset is not applicable.',
+            'model_type': 'secids_cnn'
+        }), 200
     try:
-        from services.classifier import ClassificationDetector
+        from services.classifier import get_classification_detector
         from services.preprocessor import DataPreprocessor
         from services.model_evaluator import ModelEvaluator
         
@@ -336,7 +387,7 @@ def evaluate_model():
         from flask import current_app
         config = app_config or current_app.config
         
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         preprocessor = DataPreprocessor(config)
         
         # Load test data
@@ -375,14 +426,14 @@ def get_metrics():
     JSON response with metrics
     """
     try:
-        from services.classifier import ClassificationDetector
+        from services.classifier import get_classification_detector
         
         config = request.environ.get('app_config')
         if not config:
             from flask import current_app
             config = current_app.config
         
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         model_info = classifier.get_model_info()
         
         return jsonify({
@@ -404,14 +455,14 @@ def get_ml_model_info():
     JSON response with model information
     """
     try:
-        from services.classifier import ClassificationDetector
+        from services.classifier import get_classification_detector
         
         config = request.environ.get('app_config')
         if not config:
             from flask import current_app
             config = current_app.config
         
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         model_info = classifier.get_model_info()
         
         # Format response for frontend
@@ -443,8 +494,13 @@ def get_confusion_matrix():
     Returns:
     JSON response with confusion matrix
     """
+    if _using_secids_only():
+        return jsonify({
+            'message': 'SecIDS-CNN is pre-trained; confusion matrix from internal dataset is not applicable.',
+            'matrix': [[0, 0], [0, 0]]
+        }), 200
     try:
-        from services.classifier import ClassificationDetector
+        from services.classifier import get_classification_detector
         from services.preprocessor import DataPreprocessor
         from services.model_evaluator import ModelEvaluator
         
@@ -453,7 +509,7 @@ def get_confusion_matrix():
             from flask import current_app
             config = current_app.config
         
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         preprocessor = DataPreprocessor(config)
         
         # Load test data
@@ -486,8 +542,14 @@ def get_training_history():
     Returns:
     JSON response with training history
     """
+    if _using_secids_only():
+        return jsonify({
+            'history': [],
+            'count': 0,
+            'message': 'SecIDS-CNN is pre-trained; no internal training history.'
+        }), 200
     try:
-        from services.classifier import ClassificationDetector
+        from services.classifier import get_classification_detector
         from services.preprocessor import DataPreprocessor
         from services.model_trainer import ModelTrainer
         
@@ -496,7 +558,7 @@ def get_training_history():
             from flask import current_app
             config = current_app.config
         
-        classifier = ClassificationDetector(config)
+        classifier = get_classification_detector(config)
         preprocessor = DataPreprocessor(config)
         trainer = ModelTrainer(config, classifier, preprocessor, data_collector)
         

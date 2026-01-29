@@ -368,11 +368,14 @@ export default function SummaryPage() {
                     <div className="text-xs text-muted-foreground">
                       {pcapLatest.metadata?.model_info?.detection_counts ? (
                         <>
-                          ML: {(pcapLatest.metadata.model_info.detection_counts.anomaly || 0) + (pcapLatest.metadata.model_info.detection_counts.classification || 0)} |
-                          Heuristic: {pcapLatest.metadata.model_info.detection_counts.signature || 0}
+                          ML: {(pcapLatest.metadata.model_info.detection_counts.anomaly ?? 0) + (pcapLatest.metadata.model_info.detection_counts.classification ?? 0)} |
+                          Heuristic: {pcapLatest.metadata.model_info.detection_counts.signature ?? 0}
+                          {!pcapLatest.metadata?.model_info?.ml_enabled && (
+                            <span className="block mt-0.5 text-muted-foreground/80">Traditional rules only · ML planned</span>
+                          )}
                         </>
                       ) : (
-                        "All heuristic"
+                        "Traditional heuristics"
                       )}
                     </div>
                   </div>
@@ -400,7 +403,7 @@ export default function SummaryPage() {
                           )}
                         </>
                       ) : (
-                        <div className="text-xs text-muted-foreground">Not enabled</div>
+                        <div className="text-xs text-muted-foreground">Traditional only · ML integration planned</div>
                       )}
                     </div>
                   </div>

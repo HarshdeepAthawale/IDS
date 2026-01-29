@@ -475,20 +475,23 @@ class PacketAnalyzer:
         self.feature_extractor = None
         self.data_collector = None
         
-        classification_enabled = getattr(config, 'CLASSIFICATION_ENABLED', False)
+        _ce = getattr(config, 'CLASSIFICATION_ENABLED', None) or (config.get('CLASSIFICATION_ENABLED') if hasattr(config, 'get') else None)
+        classification_enabled = _ce is True or (isinstance(_ce, str) and _ce.lower() == 'true')
         if classification_enabled:
             try:
-                from services.classifier import ClassificationDetector
+                from services.classifier import get_classification_detector
                 from services.feature_extractor import FeatureExtractor
-                from services.data_collector import DataCollector
-                
-                self.classification_detector = ClassificationDetector(config)
+                self.classification_detector = get_classification_detector(config)
                 self.feature_extractor = FeatureExtractor(config)
-                self.data_collector = DataCollector(config)
-                
                 logger.info("Classification detector enabled")
             except Exception as e:
                 logger.warning(f"Could not initialize classification detector: {e}")
+            try:
+                from services.data_collector import DataCollector
+                self.data_collector = DataCollector(config)
+            except Exception as e:
+                logger.debug(f"DataCollector not available (optional for SecIDS-CNN): {e}")
+                self.data_collector = None
         
         logger.info("PacketAnalyzer initialized")
     
