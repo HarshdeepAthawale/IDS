@@ -4,7 +4,7 @@ Provides endpoints for retrieving and managing security alerts
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from models.db_models import alerts_collection, alert_to_dict, to_object_id
 from services.logger import DatabaseLogger
@@ -323,7 +323,7 @@ def update_alert(alert_id):
             resolved = bool(data['resolved'])
             update_doc['resolved'] = resolved
             if resolved:
-                update_doc['resolved_at'] = datetime.utcnow()
+                update_doc['resolved_at'] = datetime.now(timezone.utc)
                 update_doc['resolved_by'] = data.get('resolved_by')
             else:
                 update_doc['resolved_at'] = None
@@ -593,7 +593,7 @@ def bulk_resolve_alerts():
                 if alert:
                     update_doc = {'resolved': resolved}
                     if resolved:
-                        update_doc['resolved_at'] = datetime.utcnow()
+                        update_doc['resolved_at'] = datetime.now(timezone.utc)
                         update_doc['resolved_by'] = resolved_by
                     else:
                         update_doc['resolved_at'] = None

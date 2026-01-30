@@ -9,7 +9,7 @@ import json
 import argparse
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Iterator, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 import logging
 
@@ -482,7 +482,7 @@ def process_csv_directory(input_dir: Path, chunk_size: int = 10000,
                         'total_samples': total_stats['total_samples'],
                         'total_benign': total_stats['total_benign'],
                         'total_malicious': total_stats['total_malicious'],
-                        'last_update': datetime.utcnow().isoformat()
+                        'last_update': datetime.now(timezone.utc).isoformat()
                     }
                     save_checkpoint(checkpoint_file, checkpoint_data)
                 

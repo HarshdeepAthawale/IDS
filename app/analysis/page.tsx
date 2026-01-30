@@ -1,7 +1,6 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
-import Link from "next/link"
+import { useState, Suspense } from "react"
 import { useRouter } from "next/navigation"
 import Layout from "@/components/layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -9,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Upload, RefreshCw, CheckCircle, ShieldCheck, Activity, Copy, FileJson, ExternalLink, FileSearch } from "lucide-react"
+import { Upload, RefreshCw, CheckCircle, ShieldCheck, Activity, Copy, FileJson } from "lucide-react"
 import { flaskApi } from "@/lib/flask-api"
 import { format } from "date-fns"
 import { usePcapAnalysis } from "@/contexts/pcap-analysis-context"
@@ -86,15 +85,6 @@ interface PcapAnalysisResponse {
   }
 }
 
-interface PcapAnalysisListItem {
-  id: string
-  filename?: string
-  created_at?: string
-  metadata?: { packets_processed?: number }
-  risk?: { score?: number; level?: string }
-  detections_count: number
-}
-
 function AnalysisPageContent() {
   const router = useRouter()
   const { lastPcapResult, setLastPcapResult } = usePcapAnalysis()
@@ -103,25 +93,6 @@ function AnalysisPageContent() {
   const [pcapLoading, setPcapLoading] = useState(false)
   const [pcapError, setPcapError] = useState<string | null>(null)
   const [pcapProgress, setPcapProgress] = useState(0)
-  const [storedAnalyses, setStoredAnalyses] = useState<PcapAnalysisListItem[]>([])
-  const [analysesListLoading, setAnalysesListLoading] = useState(true)
-
-  const fetchStoredAnalyses = async () => {
-    setAnalysesListLoading(true)
-    try {
-      const res = await fetch("/api/pcap/analyses")
-      const data = await res.json().catch(() => ({}))
-      setStoredAnalyses(Array.isArray(data?.analyses) ? data.analyses : [])
-    } catch {
-      setStoredAnalyses([])
-    } finally {
-      setAnalysesListLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    fetchStoredAnalyses()
-  }, [])
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
   const validatePcapFile = (file: File): string | null => {
@@ -205,7 +176,6 @@ function AnalysisPageContent() {
       })
       setLastPcapResult(response)
       setPcapProgress(100)
-      fetchStoredAnalyses()
       // Redirect to stored summary so user can revisit anytime via /analysis/[id]
       if (response?.id) {
         router.push(`/analysis/${response.id}`)
@@ -274,67 +244,6 @@ ML Models:
           <h1 className="text-3xl font-bold text-foreground">Packet Analysis</h1>
           <p className="text-muted-foreground mt-2">Upload a PCAP file for analysis. Results appear here and on Dashboard, Summary, and Alerts.</p>
         </div>
-
-        {/* Stored PCAP analyses list */}
-        <Card className="bg-card border-border">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileSearch className="h-5 w-5" />
-              Stored PCAP analyses
-            </CardTitle>
-            <p className="text-sm text-muted-foreground font-normal">All analyses saved in the database. Click &quot;View full analysis&quot; to see details.</p>
-          </CardHeader>
-          <CardContent>
-            {analysesListLoading ? (
-              <p className="text-sm text-muted-foreground">Loading analyses...</p>
-            ) : storedAnalyses.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No stored PCAP analyses yet. Upload and analyze a PCAP file below.</p>
-            ) : (
-              <div className="space-y-3">
-                {storedAnalyses.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex flex-wrap items-center gap-4 rounded-lg border border-border bg-background p-4"
-                  >
-                    <div>
-                      <span className="text-xs text-muted-foreground block">Risk</span>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-lg font-semibold">{item.risk?.score ?? "--"}</span>
-                        <Badge className={getThreatColor((item.risk?.level as string) || "low")}>
-                          {(item.risk?.level || "low").toUpperCase()}
-                        </Badge>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="text-xs text-muted-foreground block">Packets</span>
-                      <div className="text-lg font-semibold mt-0.5">{item.metadata?.packets_processed ?? "--"}</div>
-                    </div>
-                    <div>
-                      <span className="text-xs text-muted-foreground block">Detections</span>
-                      <div className="text-lg font-semibold mt-0.5">{item.detections_count ?? 0}</div>
-                    </div>
-                    {item.filename && (
-                      <p className="text-sm text-muted-foreground truncate max-w-[200px]" title={item.filename}>
-                        {item.filename}
-                      </p>
-                    )}
-                    {item.created_at && (
-                      <span className="text-xs text-muted-foreground">
-                        {format(new Date(item.created_at), "MMM d, yyyy HH:mm")}
-                      </span>
-                    )}
-                    <Button asChild variant="outline" size="sm" className="ml-auto gap-2">
-                      <Link href={`/analysis/${item.id}`}>
-                        <ExternalLink className="h-4 w-4" />
-                        View full analysis
-                      </Link>
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
 
         <Card className="bg-card border-border">
           <CardHeader>

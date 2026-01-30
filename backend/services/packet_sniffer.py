@@ -7,7 +7,7 @@ import threading
 import queue
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, Callable
 from collections import deque
 from scapy.all import *
@@ -61,7 +61,8 @@ class PacketSniffer:
         self.config = config
         self.packet_callback = packet_callback
         self.packet_queue = queue.Queue(maxsize=10000)
-        self.running = False
+        self._running = False
+        self._running_lock = threading.Lock()
         self.capture_thread = None
         self.monitoring_thread = None
         self.interface = getattr(config, 'CAPTURE_INTERFACE', 'any')
@@ -74,7 +75,8 @@ class PacketSniffer:
         self.retry_count = 0
         self.status_check_interval = getattr(config, 'SCAPY_STATUS_CHECK_INTERVAL', 30)
         
-        # Statistics
+        # Statistics with lock for thread safety
+        self._stats_lock = threading.Lock()
         self.stats = {
             'total_packets': 0,
             'dropped_packets': 0,
@@ -86,7 +88,8 @@ class PacketSniffer:
         # Capture health tracking
         self.capture_health_check_interval = getattr(config, 'CAPTURE_HEALTH_CHECK_INTERVAL', 30)  # seconds
         
-        # Connection tracking for insider threat detection
+        # Connection tracking for insider threat detection (with lock for thread safety)
+        self._connections_lock = threading.Lock()
         self.connections = {}  # {(src_ip, dst_ip, port): timestamp}
         self.last_connection_count = 0
         self.cleanup_thread = None
@@ -97,13 +100,25 @@ class PacketSniffer:
         self.rate_window_seconds = 10  # Calculate rate over last 10 seconds
         
         logger.info(f"PacketSniffer initialized for interface: {self.interface}")
-        
+
         # Auto-start if enabled
         if auto_start and getattr(config, 'SCAPY_AUTO_START', True):
             logger.info("🚀 Auto-starting Scapy packet capture...")
             time.sleep(getattr(config, 'SCAPY_AUTO_START_DELAY', 0))
             self.start_capture()
-    
+
+    @property
+    def running(self) -> bool:
+        """Thread-safe getter for running state"""
+        with self._running_lock:
+            return self._running
+
+    @running.setter
+    def running(self, value: bool):
+        """Thread-safe setter for running state"""
+        with self._running_lock:
+            self._running = value
+
     def _normalize_protocol(self, protocol: Any) -> str:
         """
         Normalize protocol identifier to a consistent string name
@@ -151,7 +166,7 @@ class PacketSniffer:
         try:
             protocol_str = str(protocol).upper().strip()
             return protocol_str if protocol_str else 'Other'
-        except:
+        except (ValueError, TypeError, AttributeError):
             return 'Other'
     
     def _parse_packet(self, packet: Packet) -> Optional[Dict[str, Any]]:
@@ -166,7 +181,7 @@ class PacketSniffer:
         """
         try:
             parsed = {
-                'timestamp': datetime.utcnow(),
+                'timestamp': datetime.now(timezone.utc),
                 'raw_size': len(packet),
                 'protocol': 'Other',
                 'src_ip': None,
@@ -324,7 +339,7 @@ class PacketSniffer:
                             # Extract URI
                             if len(lines[0].split()) > 1:
                                 parsed['uri'] = lines[0].split()[1]
-                    except:
+                    except (UnicodeDecodeError, IndexError, ValueError):
                         pass
             
             # DNS analysis
@@ -350,11 +365,12 @@ class PacketSniffer:
             packet: Scapy packet object
         """
         try:
-            # Update statistics
-            current_time = datetime.utcnow()
-            self.stats['total_packets'] += 1
-            self.stats['total_bytes'] += len(packet)
-            self.stats['last_packet_time'] = current_time
+            # Update statistics (thread-safe)
+            current_time = datetime.now(timezone.utc)
+            with self._stats_lock:
+                self.stats['total_packets'] += 1
+                self.stats['total_bytes'] += len(packet)
+                self.stats['last_packet_time'] = current_time
             
             # Track recent packet timestamp for current rate calculation
             self.recent_packet_timestamps.append(current_time)
@@ -454,8 +470,8 @@ class PacketSniffer:
         """
         try:
             import ipaddress
-            return ipaddress.ip_address(ip) in ipaddress.ip_network(network)
-        except:
+            return ipaddress.ip_address(ip) in ipaddress.ip_network(network, strict=False)
+        except (ValueError, TypeError):
             # Fallback to simple string matching for basic cases
             if '/' in network:
                 network_base = network.split('/')[0]
@@ -477,10 +493,11 @@ class PacketSniffer:
             
             if src_ip and dst_ip and dst_port:
                 connection_key = (src_ip, dst_ip, dst_port)
-                current_time = datetime.utcnow()
-                
-                # Update connection timestamp (always update on each packet)
-                self.connections[connection_key] = current_time
+                current_time = datetime.now(timezone.utc)
+
+                # Update connection timestamp (always update on each packet) - thread-safe
+                with self._connections_lock:
+                    self.connections[connection_key] = current_time
                 
         except Exception as e:
             logger.debug(f"Error updating connection tracking: {e}")
@@ -491,23 +508,26 @@ class PacketSniffer:
         Called periodically to ensure inactive connections are removed
         """
         try:
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
             cutoff_time = current_time - self.connection_timeout
-            
-            before_count = len(self.connections)
-            
-            # Remove connections older than timeout
-            self.connections = {
-                k: v for k, v in self.connections.items() 
-                if v > cutoff_time
-            }
-            
-            after_count = len(self.connections)
+
+            # Thread-safe cleanup
+            with self._connections_lock:
+                before_count = len(self.connections)
+
+                # Remove connections older than timeout
+                self.connections = {
+                    k: v for k, v in self.connections.items()
+                    if v > cutoff_time
+                }
+
+                after_count = len(self.connections)
+
             removed_count = before_count - after_count
-            
+
             if removed_count > 0:
                 logger.debug(f"Cleaned up {removed_count} stale connections (timeout: {self.connection_timeout.total_seconds()}s)")
-                
+
         except Exception as e:
             logger.debug(f"Error cleaning up stale connections: {e}")
     
@@ -534,7 +554,7 @@ class PacketSniffer:
             return
         
         self.running = True
-        self.stats['start_time'] = datetime.utcnow()
+        self.stats['start_time'] = datetime.now(timezone.utc)
         
         # Start capture thread
         self.capture_thread = threading.Thread(
@@ -742,7 +762,7 @@ class PacketSniffer:
                         if addr and addr != '127.0.0.1':
                             logger.info(f"Selected interface: {iface} (IP: {addr})")
                             return iface
-                    except:
+                    except (OSError, ValueError):
                         continue
             
             # Fallback to first available interface
@@ -863,21 +883,24 @@ class PacketSniffer:
     def get_stats(self) -> Dict[str, Any]:
         """
         Get capture statistics
-        
+
         Returns:
             Dictionary with capture statistics
         """
-        stats = self.stats.copy()
+        # Thread-safe stats copy
+        with self._stats_lock:
+            stats = self.stats.copy()
         stats['queue_size'] = self.packet_queue.qsize()
-        
+
         # Clean up stale connections before getting count
         self._cleanup_stale_connections()
-        stats['active_connections'] = len(self.connections)
+        with self._connections_lock:
+            stats['active_connections'] = len(self.connections)
         stats['running'] = self.running
         stats['retry_count'] = self.retry_count
         
         # Calculate current packet rate based on recent packets (last N seconds)
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         window_start = current_time - timedelta(seconds=self.rate_window_seconds)
         
         # Count packets in the recent window
@@ -940,8 +963,9 @@ class PacketSniffer:
     def get_connections(self) -> Dict[tuple, datetime]:
         """
         Get current active connections
-        
+
         Returns:
             Dictionary of connection tuples to timestamps
         """
-        return self.connections.copy()
+        with self._connections_lock:
+            return self.connections.copy()

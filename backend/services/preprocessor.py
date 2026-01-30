@@ -212,8 +212,8 @@ class DataPreprocessor:
                     df_eng['hour_of_day'] = df_eng['timestamp'].dt.hour
                     df_eng['day_of_week'] = df_eng['timestamp'].dt.dayofweek
                     df_eng['is_weekend'] = (df_eng['day_of_week'] >= 5).astype(int)
-                except:
-                    logger.debug("Could not extract time-based features from timestamp")
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"Could not extract time-based features from timestamp: {e}")
             
             # Log transformation for highly skewed features (if they exist)
             skewed_features = ['packet_size', 'data_transfer_rate', 'connection_duration']
@@ -493,8 +493,8 @@ class DataPreprocessor:
                         try:
                             df[col] = pd.to_numeric(df[col], errors='coerce')
                             numeric_cols.append(col)
-                        except:
-                            logger.warning(f"Skipping non-numeric feature: {col}")
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Skipping non-numeric feature {col}: {e}")
             
             if not numeric_cols:
                 raise ValueError("No numeric feature columns found")

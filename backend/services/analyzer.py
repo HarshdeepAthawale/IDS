@@ -122,7 +122,7 @@ class SignatureDetector:
                 try:
                     # Try to decode as ASCII for text-based attacks
                     payload_text = bytes.fromhex(payload_hex).decode('ascii', errors='ignore')
-                except:
+                except (ValueError, UnicodeDecodeError):
                     payload_text = ''
                 
                 # Check against signatures

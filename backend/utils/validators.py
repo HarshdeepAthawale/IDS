@@ -103,8 +103,12 @@ def validate_packet_data(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     
     # Validate protocol
     protocol = str(data.get('protocol', '')).upper()
-    if protocol not in ['TCP', 'UDP', 'ICMP', 'HTTP', 'HTTPS']:
-        return False, "Invalid protocol. Must be TCP, UDP, ICMP, HTTP, or HTTPS"
+    valid_protocols = [
+        'TCP', 'UDP', 'ICMP', 'ICMPV6', 'HTTP', 'HTTPS',
+        'ARP', 'IPV4', 'IPV6', 'GRE', 'ESP', 'AH', 'OSPF', 'SCTP', 'OTHER'
+    ]
+    if protocol not in valid_protocols:
+        return False, f"Invalid protocol. Must be one of: {', '.join(valid_protocols)}"
     
     # Validate ports if present
     if 'src_port' in data and data['src_port'] is not None:

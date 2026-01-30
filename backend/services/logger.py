@@ -7,10 +7,21 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
+from models import db_models
 from models.db_models import (
-    alerts_collection, traffic_stats_collection, user_activities_collection,
     alert_to_dict, traffic_stat_to_dict, user_activity_to_dict, to_object_id
 )
+
+# Access collections dynamically to pick up values set by init_db()
+def _get_alerts_collection():
+    return db_models.alerts_collection
+
+def _get_traffic_stats_collection():
+    return db_models.traffic_stats_collection
+
+def _get_user_activities_collection():
+    return db_models.user_activities_collection
+
 from .cache import CacheService, CachePrefixes, CacheTTL
 
 logger = logging.getLogger(__name__)
@@ -78,7 +89,7 @@ def normalize_protocol(protocol: Any) -> str:
         if protocol_str in ['UNKNOWN', 'OTHER', '']:
             return 'Other'
         return protocol_str if protocol_str else 'Other'
-    except:
+    except (ValueError, TypeError, AttributeError):
         return 'Other'
 
 class DatabaseLogger:
@@ -124,6 +135,14 @@ class DatabaseLogger:
                 logger.debug(f"Deduplicated alert: {dedup_key}")
                 return None
             
+            # Convert flags to int if it's a Scapy FlagValue (can't be serialized to MongoDB)
+            flags = packet_data.get('flags')
+            if flags is not None:
+                try:
+                    flags = int(flags)
+                except (TypeError, ValueError):
+                    flags = str(flags)
+
             # Create alert document
             alert_doc = {
                 'source_ip': packet_data.get('src_ip', 'unknown'),
@@ -140,14 +159,15 @@ class DatabaseLogger:
                 'resolved_at': None,
                 'resolved_by': None,
                 'payload_size': packet_data.get('payload_size'),
-                'flags': packet_data.get('flags'),
+                'flags': flags,
                 'user_agent': packet_data.get('user_agent'),
                 'uri': packet_data.get('uri')
             }
             
             # Save to database
-            if alerts_collection is not None:
-                result = alerts_collection.insert_one(alert_doc)
+            alerts_coll = _get_alerts_collection()
+            if alerts_coll is not None:
+                result = alerts_coll.insert_one(alert_doc)
             else:
                 logger.warning("alerts_collection is None, skipping alert insert")
                 return None
@@ -227,9 +247,10 @@ class DatabaseLogger:
             except (ValueError, TypeError):
                 query['port'] = dest_port
             
-            if alerts_collection is not None:
+            alerts_coll = _get_alerts_collection()
+            if alerts_coll is not None:
                 try:
-                    recent_alert = alerts_collection.find_one(query)
+                    recent_alert = alerts_coll.find_one(query)
                     if recent_alert:
                         return True
                 except Exception as e:
@@ -335,9 +356,10 @@ class DatabaseLogger:
             
             # Get recent anomaly count
             recent_cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
-            if alerts_collection is not None:
+            alerts_coll = _get_alerts_collection()
+            if alerts_coll is not None:
                 try:
-                    recent_anomalies = alerts_collection.count_documents({
+                    recent_anomalies = alerts_coll.count_documents({
                         'type': 'anomaly',
                         'timestamp': {'$gt': recent_cutoff}
                     })
@@ -366,8 +388,9 @@ class DatabaseLogger:
                 'timestamp': datetime.now(timezone.utc)
             }
             
-            if traffic_stats_collection is not None:
-                traffic_stats_collection.insert_one(traffic_stat_doc)
+            traffic_coll = _get_traffic_stats_collection()
+            if traffic_coll is not None:
+                traffic_coll.insert_one(traffic_stat_doc)
             else:
                 logger.warning("traffic_stats_collection is None, skipping insert")
             
@@ -414,7 +437,11 @@ class DatabaseLogger:
                 'timestamp': datetime.now(timezone.utc)
             }
             
-            result = user_activities_collection.insert_one(activity_doc)
+            user_activities_coll = _get_user_activities_collection()
+            if user_activities_coll is None:
+                logger.warning("user_activities_collection is None, skipping insert")
+                return None
+            result = user_activities_coll.insert_one(activity_doc)
             activity_doc['_id'] = result.inserted_id
             
             logger.info(f"Logged user activity: {user_id} - {activity_type} - {severity}")
@@ -472,7 +499,11 @@ class DatabaseLogger:
                 query['source_ip'] = filters['source_ip']
             
             # Execute query with sort and limit
-            alerts = list(alerts_collection.find(query)
+            alerts_coll = _get_alerts_collection()
+            if alerts_coll is None:
+                logger.warning("alerts_collection is None, returning empty list")
+                return []
+            alerts = list(alerts_coll.find(query)
                          .sort('timestamp', -1)
                          .limit(limit))
             
@@ -507,8 +538,9 @@ class DatabaseLogger:
                 logger.debug("Returning traffic stats from cache")
                 return cached_result
             
-            if traffic_stats_collection is not None:
-                stats = list(traffic_stats_collection.find()
+            traffic_coll = _get_traffic_stats_collection()
+            if traffic_coll is not None:
+                stats = list(traffic_coll.find()
                             .sort('timestamp', -1)
                             .limit(limit))
             else:
@@ -538,35 +570,36 @@ class DatabaseLogger:
         """
         try:
             # Check if collection is initialized
-            if user_activities_collection is None:
+            user_activities_coll = _get_user_activities_collection()
+            if user_activities_coll is None:
                 logger.warning("User activities collection not initialized, returning empty list")
                 return []
-            
+
             # Build MongoDB query
             query = {}
-            
+
             # Apply filters
             if filters.get('user_id'):
                 query['user_id'] = filters['user_id']
-            
+
             if filters.get('severity'):
                 query['severity'] = filters['severity']
-            
+
             if filters.get('activity_type'):
                 query['activity_type'] = filters['activity_type']
-            
+
             if filters.get('start_date'):
                 if 'timestamp' not in query:
                     query['timestamp'] = {}
                 query['timestamp']['$gte'] = filters['start_date']
-            
+
             if filters.get('end_date'):
                 if 'timestamp' not in query:
                     query['timestamp'] = {}
                 query['timestamp']['$lte'] = filters['end_date']
-            
+
             # Execute query with sort and limit
-            activities = list(user_activities_collection.find(query)
+            activities = list(user_activities_coll.find(query)
                              .sort('timestamp', -1)
                              .limit(limit))
             
@@ -685,12 +718,13 @@ class DatabaseLogger:
             if not obj_id:
                 logger.warning(f"Invalid alert ID format: {alert_id}")
                 return False
-            
-            if alerts_collection is None:
+
+            alerts_coll = _get_alerts_collection()
+            if alerts_coll is None:
                 logger.warning("alerts_collection is None, cannot resolve alert")
                 return False
-            
-            result = alerts_collection.update_one(
+
+            result = alerts_coll.update_one(
                 {'_id': obj_id},
                 {
                     '$set': {
@@ -721,7 +755,8 @@ class DatabaseLogger:
         """
         try:
             # Check if collection is initialized
-            if alerts_collection is None:
+            alerts_coll = _get_alerts_collection()
+            if alerts_coll is None:
                 logger.warning("Alerts collection not initialized, returning empty summary")
                 return {
                     'total_recent_alerts': 0,
@@ -730,59 +765,53 @@ class DatabaseLogger:
                     'alerts_by_severity': {},
                     'last_updated': datetime.now(timezone.utc).isoformat()
                 }
-            
+
             cache_key = "summary"
-            
+
             # Try cache first
             cached_result = self.cache.get(CachePrefixes.ALERT_SUMMARY, cache_key)
             if cached_result:
                 logger.debug("Returning alert summary from cache")
                 return cached_result
-            
+
             current_time = datetime.now(timezone.utc)
-            
+
             # Recent alerts (last 24 hours)
             recent_cutoff = current_time - timedelta(hours=24)
-            if alerts_collection is not None:
-                try:
-                    recent_alerts = alerts_collection.count_documents({
-                        'timestamp': {'$gt': recent_cutoff}
-                    })
-                    
-                    # Unresolved alerts
-                    unresolved_alerts = alerts_collection.count_documents({
-                        'resolved': False
-                    })
-                except Exception as e:
-                    logger.error(f"Error getting alert counts: {e}")
-                    recent_alerts = 0
-                    unresolved_alerts = 0
-            else:
-                logger.warning("alerts_collection is None, using default values")
+            try:
+                recent_alerts = alerts_coll.count_documents({
+                    'timestamp': {'$gt': recent_cutoff}
+                })
+
+                # Unresolved alerts
+                unresolved_alerts = alerts_coll.count_documents({
+                    'resolved': False
+                })
+            except Exception as e:
+                logger.error(f"Error getting alert counts: {e}")
                 recent_alerts = 0
                 unresolved_alerts = 0
-            
+
             # Alerts by type using aggregation
             type_counts = {}
             severity_counts = {}
-            if alerts_collection is not None:
-                try:
-                    type_pipeline = [
-                        {'$match': {'timestamp': {'$gt': recent_cutoff}}},
-                        {'$group': {'_id': '$type', 'count': {'$sum': 1}}}
-                    ]
-                    for result in alerts_collection.aggregate(type_pipeline):
-                        type_counts[result['_id']] = result['count']
-                    
-                    # Alerts by severity using aggregation
-                    severity_pipeline = [
-                        {'$match': {'timestamp': {'$gt': recent_cutoff}}},
-                        {'$group': {'_id': '$severity', 'count': {'$sum': 1}}}
-                    ]
-                    for result in alerts_collection.aggregate(severity_pipeline):
-                        severity_counts[result['_id']] = result['count']
-                except Exception as e:
-                    logger.error(f"Error getting alert aggregations: {e}")
+            try:
+                type_pipeline = [
+                    {'$match': {'timestamp': {'$gt': recent_cutoff}}},
+                    {'$group': {'_id': '$type', 'count': {'$sum': 1}}}
+                ]
+                for result in alerts_coll.aggregate(type_pipeline):
+                    type_counts[result['_id']] = result['count']
+
+                # Alerts by severity using aggregation
+                severity_pipeline = [
+                    {'$match': {'timestamp': {'$gt': recent_cutoff}}},
+                    {'$group': {'_id': '$severity', 'count': {'$sum': 1}}}
+                ]
+                for result in alerts_coll.aggregate(severity_pipeline):
+                    severity_counts[result['_id']] = result['count']
+            except Exception as e:
+                logger.error(f"Error getting alert aggregations: {e}")
             
             summary = {
                 'total_recent_alerts': recent_alerts,
@@ -810,30 +839,33 @@ class DatabaseLogger:
         """
         try:
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
-            
+
             # Delete old alerts
-            if alerts_collection is not None:
-                old_alerts_result = alerts_collection.delete_many({
+            alerts_coll = _get_alerts_collection()
+            if alerts_coll is not None:
+                old_alerts_result = alerts_coll.delete_many({
                     'timestamp': {'$lt': cutoff_date}
                 })
                 old_alerts = old_alerts_result.deleted_count
             else:
                 logger.warning("alerts_collection is None, skipping cleanup")
                 old_alerts = 0
-            
+
             # Delete old traffic stats
-            if traffic_stats_collection is not None:
-                old_traffic_result = traffic_stats_collection.delete_many({
+            traffic_coll = _get_traffic_stats_collection()
+            if traffic_coll is not None:
+                old_traffic_result = traffic_coll.delete_many({
                     'timestamp': {'$lt': cutoff_date}
                 })
                 old_traffic = old_traffic_result.deleted_count
             else:
                 logger.warning("traffic_stats_collection is None, skipping cleanup")
                 old_traffic = 0
-            
+
             # Delete old user activities
-            if user_activities_collection is not None:
-                old_activities_result = user_activities_collection.delete_many({
+            user_activities_coll = _get_user_activities_collection()
+            if user_activities_coll is not None:
+                old_activities_result = user_activities_coll.delete_many({
                     'timestamp': {'$lt': cutoff_date}
                 })
                 old_activities = old_activities_result.deleted_count

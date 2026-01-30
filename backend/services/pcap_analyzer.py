@@ -474,14 +474,43 @@ class PcapAnalyzer:
 
         # Risk from SecIDS-CNN / classification when enabled, trained, and we have confidence
         if classification_enabled and classification_trained and confidence_scores:
-            # Malicious probability (0–1) -> risk score (0–100); use mean confidence
-            mean_conf = sum(confidence_scores) / len(confidence_scores)
-            score = round(mean_conf * 100)
-            score = max(0, min(100, score))
+            # Focus on packets that are classified as malicious (confidence > 0.5)
+            # Don't dilute high-confidence malicious detections with benign traffic
+            malicious_threshold = 0.5
+            malicious_scores = [s for s in confidence_scores if s > malicious_threshold]
+
             model_label = "SecIDS-CNN" if classification_model_type == "secids_cnn" else "Classification"
-            rationale.append(f"{model_label} malicious confidence (avg {mean_conf:.2f})")
+
+            if malicious_scores:
+                # Risk scoring based on malicious packets:
+                # - Max confidence contributes 60% (a single high-confidence detection is concerning)
+                # - Average malicious confidence contributes 25%
+                # - Percentage of malicious packets contributes 15%
+                max_conf = max(malicious_scores)
+                avg_malicious_conf = sum(malicious_scores) / len(malicious_scores)
+                malicious_ratio = len(malicious_scores) / len(confidence_scores)
+
+                # Weighted score calculation
+                score = (
+                    (max_conf * 100 * 0.60) +           # Max confidence (60% weight)
+                    (avg_malicious_conf * 100 * 0.25) + # Avg malicious confidence (25% weight)
+                    (min(malicious_ratio * 200, 15))    # % malicious packets (15% weight, capped)
+                )
+                score = round(score)
+                score = max(0, min(100, score))
+
+                rationale.append(f"{model_label}: {len(malicious_scores)} malicious packet(s) detected")
+                rationale.append(f"Max confidence: {max_conf:.0%}, Avg: {avg_malicious_conf:.0%}")
+            else:
+                # No malicious packets detected - low risk
+                mean_conf = sum(confidence_scores) / len(confidence_scores)
+                score = round(mean_conf * 100)
+                score = max(0, min(100, score))
+                rationale.append(f"{model_label}: No malicious packets (avg confidence {mean_conf:.2f})")
+
             for d in detections[:4]:
                 rationale.append(d.get("title", "Detection identified"))
+
             if score >= 80:
                 level = "critical"
             elif score >= 65:

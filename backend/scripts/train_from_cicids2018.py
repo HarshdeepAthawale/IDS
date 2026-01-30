@@ -31,7 +31,7 @@ from services.preprocessor import DataPreprocessor
 from services.classifier import get_classification_detector
 from services.model_trainer import ModelTrainer
 from services.model_evaluator import ModelEvaluator
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Configure logging
 logging.basicConfig(
@@ -131,7 +131,7 @@ def estimate_training_time(total_samples, hyperparameter_tuning=False):
 def train_model(hyperparameter_tuning: bool = False) -> bool:
     """Train the classification model"""
     try:
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Load configuration
         config = Config()
@@ -222,7 +222,7 @@ def train_model(hyperparameter_tuning: bool = False) -> bool:
                 logger.info(f"  {param}: {value}")
         
         # Calculate actual training time
-        actual_time = (datetime.utcnow() - start_time).total_seconds()
+        actual_time = (datetime.now(timezone.utc) - start_time).total_seconds()
         actual_hours = actual_time / 3600
         actual_minutes = (actual_time % 3600) / 60
         

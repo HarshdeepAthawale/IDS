@@ -6,7 +6,7 @@ Handles training pipeline, hyperparameter tuning, and model selection
 import logging
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, cross_val_score
 from sklearn.metrics import make_scorer, f1_score
@@ -416,7 +416,7 @@ class ModelTrainer:
                     'message': 'SecIDS-CNN is pre-trained. Use evaluation endpoints to assess performance.',
                     'test_metrics': {}
                 }
-            start_time = datetime.utcnow()
+            start_time = datetime.now(timezone.utc)
             
             # Load training data
             logger.info("Loading training data...")
@@ -567,11 +567,11 @@ class ModelTrainer:
             test_metrics = evaluator.evaluate(X_test, y_test)
             
             # Calculate training time
-            training_time = (datetime.utcnow() - start_time).total_seconds()
+            training_time = (datetime.now(timezone.utc) - start_time).total_seconds()
             
             # Store training history
             training_record = {
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'training_samples': len(X_train),
                 'validation_samples': len(X_val),
                 'test_samples': len(X_test),

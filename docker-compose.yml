@@ -34,11 +34,11 @@ services:
       - NET_ADMIN
       - NET_RAW
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:3002/api/health')\" 2>/dev/null || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3002/api/health', timeout=5)"]
       interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
 
   frontend:
     build:

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import Link from "next/link"
 import Layout from "@/components/layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -118,17 +118,37 @@ export default function AlertsPage() {
     fetchLatestPcapDetections()
   }, [fetchLatestPcapDetections])
 
+  // Filter PCAP detections based on current filters
+  const filteredPcapDetections = useMemo(() => {
+    return pcapDetections.filter((d) => {
+      // Filter by severity
+      if (filters.severity !== "all" && d.severity !== filters.severity) {
+        return false
+      }
+      // Filter by type (ml_source maps to type)
+      if (filters.type !== "all") {
+        const detectionType = d.ml_source === "signature" ? "signature" :
+          d.ml_source === "anomaly" ? "anomaly" :
+            d.ml_source === "classification" ? "classification" : "signature"
+        if (detectionType !== filters.type) {
+          return false
+        }
+      }
+      return true
+    })
+  }, [pcapDetections, filters.severity, filters.type])
+
   const fetchAlertsData = async (page = 1) => {
     try {
       setError(null)
       setLoading(true)
-      
+
       // Build query parameters
       const params: any = {
         limit: 50,
         page: page
       }
-      
+
       if (dateRange.from) {
         params.start_date = dateRange.from.toISOString()
       }
@@ -144,9 +164,9 @@ export default function AlertsPage() {
       if (filters.resolved !== "all") {
         params.resolved = filters.resolved === "resolved"
       }
-      
+
       const response = await flaskApi.getAlerts(params)
-      
+
       // Transform Flask alerts to include resolved status
       const transformedAlerts = (response.alerts as ApiAlert[]).map(alert => ({
         id: alert.id.toString(),
@@ -161,7 +181,7 @@ export default function AlertsPage() {
         confidenceScore: alert.confidence_score,
         classificationResult: alert.classification_result
       }))
-      
+
       setAlerts(transformedAlerts)
       setTotalAlerts(response.total)
       setTotalPages(Math.ceil(response.total / 50))
@@ -182,13 +202,13 @@ export default function AlertsPage() {
   const handleAlertUpdate = async (alertId: string, resolved: boolean) => {
     setUpdatingAlerts(prev => new Set(prev).add(alertId))
     try {
-      await flaskApi.updateAlert(parseInt(alertId), { 
-        resolved, 
-        resolved_by: 'admin' 
+      await flaskApi.updateAlert(parseInt(alertId), {
+        resolved,
+        resolved_by: 'admin'
       })
-      
+
       // Update local state
-      setAlerts(prev => prev.map(alert => 
+      setAlerts(prev => prev.map(alert =>
         alert.id === alertId ? { ...alert, resolved } : alert
       ))
     } catch (error) {
@@ -205,7 +225,7 @@ export default function AlertsPage() {
 
   const handleBulkResolve = async (resolved: boolean) => {
     if (selectedAlerts.size === 0) return
-    
+
     setUpdatingAlerts(prev => new Set([...prev, ...selectedAlerts]))
     try {
       await flaskApi.bulkResolveAlerts({
@@ -213,12 +233,12 @@ export default function AlertsPage() {
         resolved,
         resolved_by: 'admin'
       })
-      
+
       // Update local state
-      setAlerts(prev => prev.map(alert => 
+      setAlerts(prev => prev.map(alert =>
         selectedAlerts.has(alert.id) ? { ...alert, resolved } : alert
       ))
-      
+
       // Clear selection
       setSelectedAlerts(new Set())
     } catch (error) {
@@ -237,10 +257,10 @@ export default function AlertsPage() {
     setUpdatingAlerts(prev => new Set(prev).add(alertId))
     try {
       await flaskApi.deleteAlert(parseInt(alertId))
-      
+
       // Remove from local state
       setAlerts(prev => prev.filter(alert => alert.id !== alertId))
-      
+
       // Remove from selection if selected
       setSelectedAlerts(prev => {
         const newSet = new Set(prev)
@@ -261,7 +281,7 @@ export default function AlertsPage() {
 
   const handleBulkDelete = async () => {
     if (selectedAlerts.size === 0) return
-    
+
     setUpdatingAlerts(prev => new Set([...prev, ...selectedAlerts]))
     try {
       // Use bulk delete endpoint
@@ -273,10 +293,10 @@ export default function AlertsPage() {
       if (result.failed_count != null && result.failed_count > 0) {
         console.warn(`Failed to delete ${result.failed_count} alerts:`, result.failed_alerts)
       }
-      
+
       // Remove from local state
       setAlerts(prev => prev.filter(alert => !selectedAlerts.has(alert.id)))
-      
+
       // Clear selection
       setSelectedAlerts(new Set())
     } catch (error) {
@@ -371,7 +391,7 @@ export default function AlertsPage() {
             <Button onClick={() => fetchAlertsData(currentPage)} disabled={loading} variant="outline" size="sm">
               <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
               Refresh
-          </Button>
+            </Button>
           </div>
         </div>
 
@@ -489,6 +509,11 @@ export default function AlertsPage() {
             <CardTitle className="flex items-center gap-2">
               <FileSearch className="h-5 w-5" />
               Detections from PCAP
+              {pcapDetections.length > 0 && (
+                <span className="text-sm font-normal text-muted-foreground">
+                  ({filteredPcapDetections.length}{filters.severity !== "all" || filters.type !== "all" ? ` of ${pcapDetections.length}` : ""})
+                </span>
+              )}
               {pcapLoading && <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />}
             </CardTitle>
           </CardHeader>
@@ -505,9 +530,11 @@ export default function AlertsPage() {
                   </Link>
                 </Button>
               </div>
+            ) : filteredPcapDetections.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No detections match the current filters. Try adjusting your filter criteria.</p>
             ) : (
               <div className="space-y-2">
-                {pcapDetections.map((d) => (
+                {filteredPcapDetections.map((d) => (
                   <div
                     key={d.id}
                     className="flex items-start gap-3 p-3 rounded-lg bg-background border border-border"
@@ -594,16 +621,15 @@ export default function AlertsPage() {
                 Select all ({selectedAlerts.size}/{alerts.length})
               </span>
             </div>
-            
+
             <div className="space-y-3">
               {alerts.map((alert) => (
                 <div
                   key={alert.id}
-                  className={`flex items-start justify-between p-3 rounded-lg bg-background border transition-colors ${
-                    alert.resolved 
-                      ? 'border-green-200 bg-green-50/10 opacity-75' 
+                  className={`flex items-start justify-between p-3 rounded-lg bg-background border transition-colors ${alert.resolved
+                      ? 'border-green-200 bg-green-50/10 opacity-75'
                       : 'border-border hover:border-primary'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-start gap-3 flex-1">
                     <Checkbox
@@ -634,7 +660,7 @@ export default function AlertsPage() {
                             </span>
                             {alert.classificationResult.probabilities && (
                               <span className="text-muted-foreground">
-                                | Benign: {(alert.classificationResult.probabilities.benign * 100).toFixed(1)}% 
+                                | Benign: {(alert.classificationResult.probabilities.benign * 100).toFixed(1)}%
                                 | Malicious: {(alert.classificationResult.probabilities.malicious * 100).toFixed(1)}%
                               </span>
                             )}

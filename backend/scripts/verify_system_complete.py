@@ -86,7 +86,7 @@ def test_anomaly_detector():
         logger.info("✓ Anomaly detection model loaded")
         
         # Test with sample packet
-        from datetime import datetime
+        from datetime import datetime, timezone
         test_packet = {
             'payload_size': 64,
             'raw_size': 74,
@@ -94,7 +94,7 @@ def test_anomaly_detector():
             'src_port': 12345,
             'dst_port': 80,
             'flags': 2,  # Use integer instead of hex
-            'timestamp': datetime.utcnow(),
+            'timestamp': datetime.now(timezone.utc),
             'payload_preview': '474554202f'
         }
         
@@ -124,7 +124,7 @@ def test_packet_analyzer():
         logger.info("✓ Packet analyzer initialized")
         
         # Test packet with SQL injection attempt
-        from datetime import datetime
+        from datetime import datetime, timezone
         test_packet = {
             'src_ip': '192.168.1.100',
             'dst_ip': '10.0.0.1',
@@ -138,7 +138,7 @@ def test_packet_analyzer():
             'http_method': 'GET',
             'user_agent': 'Mozilla/5.0',
             'payload_preview': '474554202f6170692f7573657273',
-            'timestamp': datetime.utcnow()
+            'timestamp': datetime.now(timezone.utc)
         }
         
         results = analyzer.analyze_packet(test_packet)

@@ -4,26 +4,56 @@ Supports both local development and AWS deployment
 """
 
 import os
+import secrets
+import warnings
 
 # Try to load dotenv if available
 try:
     from dotenv import load_dotenv
-    # Load environment variables from .env file (if it exists)
-    try:
-        load_dotenv()
-    except Exception as e:
-        print(f"Warning: Could not load .env file: {e}")
-        print("Using default configuration values...")
+    load_dotenv()
 except ImportError:
-    # dotenv not installed - that's okay, we'll use environment variables directly
     pass
+except Exception as e:
+    print(f"Warning: Could not load .env file: {e}")
+
+
+def _get_secret_key():
+    """Get secret key with proper validation"""
+    key = os.environ.get('SECRET_KEY')
+    if not key or key in ('dev-secret-key-change-in-production',
+                          'change-this-to-a-secure-random-key',
+                          'your-secret-key-here',
+                          'your-secret-key-here-generate-a-secure-one'):
+        if os.environ.get('FLASK_ENV') == 'production':
+            raise ValueError(
+                "SECRET_KEY must be set to a secure value in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        # Generate a random key for development (warning issued)
+        warnings.warn(
+            "Using auto-generated SECRET_KEY. Set SECRET_KEY env var for persistent sessions.",
+            UserWarning
+        )
+        return secrets.token_hex(32)
+    return key
+
 
 class Config:
     """Base configuration class"""
-    
+
     # Flask settings
-    SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
+    SECRET_KEY = _get_secret_key()
     DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
+
+    # Request limits (protect against DoS)
+    MAX_CONTENT_LENGTH = int(os.environ.get('MAX_CONTENT_LENGTH', 50 * 1024 * 1024))  # 50MB default
+
+    # CORS configuration
+    CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000').split(',')
+
+    # API Authentication (optional - set API_KEY to enable)
+    API_KEY = os.environ.get('API_KEY')  # None = authentication disabled
+    API_KEY_HEADER = os.environ.get('API_KEY_HEADER', 'X-API-Key')
     
     # MongoDB configuration
     MONGODB_URI = os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017/'

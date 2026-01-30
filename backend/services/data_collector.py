@@ -5,7 +5,7 @@ Handles collection, storage, and labeling of training samples
 
 import logging
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Iterator
 from models.db_models import get_db
 
@@ -74,12 +74,20 @@ class DataCollector:
             Created training sample document
         """
         try:
+            # Convert flags to int if it's a Scapy FlagValue (can't be serialized to MongoDB)
+            flags = packet_data.get('flags')
+            if flags is not None:
+                try:
+                    flags = int(flags)
+                except (TypeError, ValueError):
+                    flags = str(flags)
+
             sample_doc = {
                 'features': features,
                 'label': label,
                 'labeled_by': labeled_by,
                 'confidence': confidence,
-                'timestamp': datetime.utcnow(),
+                'timestamp': datetime.now(timezone.utc),
                 'source_ip': packet_data.get('src_ip', 'unknown'),
                 'dest_ip': packet_data.get('dst_ip', 'unknown'),
                 'protocol': packet_data.get('protocol', 'unknown'),
@@ -87,7 +95,7 @@ class DataCollector:
                 'metadata': {
                     'raw_size': packet_data.get('raw_size'),
                     'payload_size': packet_data.get('payload_size'),
-                    'flags': packet_data.get('flags'),
+                    'flags': flags,
                     'user_agent': packet_data.get('user_agent'),
                     'uri': packet_data.get('uri')
                 }
@@ -135,7 +143,7 @@ class DataCollector:
                         'label': label,
                         'labeled_by': labeled_by,
                         'confidence': confidence,
-                        'labeled_at': datetime.utcnow()
+                        'labeled_at': datetime.now(timezone.utc)
                     }
                 }
             )
@@ -339,7 +347,7 @@ class DataCollector:
                 'user_labeled': user_labeled,
                 'imported': total_imported,  # Total imported (includes cicids2018)
                 'cicids2018_imported': cicids2018_imported,  # Specifically CICIDS2018
-                'last_updated': datetime.utcnow().isoformat()
+                'last_updated': datetime.now(timezone.utc).isoformat()
             }
             
         except Exception as e:
@@ -376,7 +384,7 @@ class DataCollector:
                     'label': sample['label'],
                     'labeled_by': labeled_by,
                     'confidence': sample.get('confidence', 1.0),
-                    'timestamp': sample.get('timestamp', datetime.utcnow()),
+                    'timestamp': sample.get('timestamp', datetime.now(timezone.utc)),
                     'source_ip': sample.get('source_ip', 'unknown'),
                     'dest_ip': sample.get('dest_ip', 'unknown'),
                     'protocol': sample.get('protocol', 'unknown'),

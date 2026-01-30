@@ -7,10 +7,9 @@ import logging
 import threading
 import signal
 import sys
-import json
 import os
 import time
-from datetime import datetime, timezone, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -26,7 +25,6 @@ from routes.stats import stats_bp, init_logger as init_stats_logger
 from routes.analyze import analyze_bp, init_services as init_analyze_services
 from routes.pcap import pcap_bp, init_pcap_services
 from routes.training import training_bp, init_services as init_training_services
-from datetime import timedelta
 
 # Configure logging
 logging.basicConfig(
@@ -56,9 +54,32 @@ def create_app(config_name='default'):
     # Initialize configuration
     config[config_name].init_app(app)
     
-    # Enable CORS for Next.js frontend
-    CORS(app, origins=['http://localhost:3000', 'http://127.0.0.1:3000'])
-    
+    # Enable CORS for Next.js frontend (configurable via CORS_ORIGINS env var)
+    cors_origins = getattr(app.config, 'CORS_ORIGINS', None) or ['http://localhost:3000', 'http://127.0.0.1:3000']
+    CORS(app, origins=cors_origins, supports_credentials=True)
+
+    # Optional API Key Authentication Middleware
+    api_key = getattr(app.config, 'API_KEY', None)
+    api_key_header = getattr(app.config, 'API_KEY_HEADER', 'X-API-Key')
+
+    @app.before_request
+    def check_api_key():
+        """Check API key if authentication is enabled"""
+        if not api_key:
+            return None  # Authentication disabled
+
+        # Skip auth for health check and OPTIONS requests
+        if request.path == '/api/health' or request.method == 'OPTIONS':
+            return None
+
+        # Check API key header
+        provided_key = request.headers.get(api_key_header)
+        if not provided_key or provided_key != api_key:
+            logger.warning(f"Unauthorized API access attempt from {request.remote_addr}")
+            return jsonify({'error': 'Unauthorized', 'message': 'Invalid or missing API key'}), 401
+
+        return None
+
     # Initialize rate limiter
     limiter = Limiter(
         app=app,
@@ -74,8 +95,8 @@ def create_app(config_name='default'):
     # Initialize SocketIO for real-time communication
     # Use threading mode for better compatibility
     socketio = SocketIO(
-        app, 
-        cors_allowed_origins=['http://localhost:3000', 'http://127.0.0.1:3000'],
+        app,
+        cors_allowed_origins=cors_origins,
         async_mode='threading',
         logger=False,
         engineio_logger=False
@@ -198,19 +219,36 @@ def create_app(config_name='default'):
     # Store socketio instance globally for broadcasting
     app._socketio = socketio
     
+    # Security headers middleware
+    @app.after_request
+    def add_security_headers(response):
+        """Add security headers to all responses"""
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        # Content-Security-Policy for API responses
+        if response.content_type and 'application/json' in response.content_type:
+            response.headers['Content-Security-Policy'] = "default-src 'none'"
+        return response
+
     # Error handlers
     @app.errorhandler(404)
     def not_found(error):
         return jsonify({'error': 'Endpoint not found'}), 404
-    
+
     @app.errorhandler(500)
     def internal_error(error):
         logger.error(f"Internal server error: {error}")
         return jsonify({'error': 'Internal server error'}), 500
-    
+
     @app.errorhandler(400)
     def bad_request(error):
         return jsonify({'error': 'Bad request'}), 400
+
+    @app.errorhandler(413)
+    def request_entity_too_large(error):
+        return jsonify({'error': 'Request payload too large'}), 413
     
     # Health check endpoint
     @app.route('/api/health', methods=['GET'])
@@ -400,8 +438,8 @@ def create_app(config_name='default'):
                 'alert_dedup_window': app.config.get('ALERT_DEDUP_WINDOW', 300)
             },
             'database_info': {
-                'type': 'sqlite' if 'sqlite' in app.config.get('DATABASE_URL', '') else 'postgresql',
-                'url': app.config.get('DATABASE_URL', '').replace(app.config.get('SECRET_KEY', ''), '***')
+                'type': 'mongodb',
+                'status': 'connected' if alerts_collection is not None else 'disconnected'
             }
         })
     

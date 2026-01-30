@@ -10,7 +10,7 @@ import argparse
 import json
 from pathlib import Path
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -42,7 +42,7 @@ def evaluate_model(model_path: str, output_dir: str = None) -> bool:
         True if evaluation successful, False otherwise
     """
     try:
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Load configuration
         config = Config()
@@ -173,7 +173,7 @@ def evaluate_model(model_path: str, output_dir: str = None) -> bool:
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
             
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
             
             # Save full report as JSON
             report_file = output_path / f'evaluation_report_{timestamp}.json'
@@ -187,7 +187,7 @@ def evaluate_model(model_path: str, output_dir: str = None) -> bool:
             with open(summary_file, 'w') as f:
                 f.write("Model Evaluation Summary\n")
                 f.write("="*60 + "\n\n")
-                f.write(f"Evaluation Date: {datetime.utcnow().isoformat()}\n")
+                f.write(f"Evaluation Date: {datetime.now(timezone.utc).isoformat()}\n")
                 f.write(f"Model Path: {model_path}\n")
                 f.write(f"Test Samples: {summary.get('test_samples', 0):,}\n\n")
                 f.write("Performance Metrics:\n")
@@ -206,7 +206,7 @@ def evaluate_model(model_path: str, output_dir: str = None) -> bool:
             logger.info(f"✓ Evaluation summary saved: {summary_file}")
         
         # Calculate evaluation time
-        eval_time = (datetime.utcnow() - start_time).total_seconds()
+        eval_time = (datetime.now(timezone.utc) - start_time).total_seconds()
         logger.info("")
         logger.info("="*60)
         logger.info(f"Evaluation completed in {eval_time:.2f} seconds")

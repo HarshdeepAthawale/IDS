@@ -211,8 +211,8 @@ class CacheService:
                     'redis_connected_clients': info.get('connected_clients', 0),
                     'redis_total_commands_processed': info.get('total_commands_processed', 0)
                 })
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not fetch Redis stats: {e}")
         
         return stats
     

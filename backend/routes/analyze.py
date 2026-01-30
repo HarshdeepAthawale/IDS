@@ -4,7 +4,7 @@ Provides endpoints for on-demand packet and flow analysis
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from services.analyzer import PacketAnalyzer
 from services.logger import DatabaseLogger
@@ -104,9 +104,9 @@ def analyze_packet():
         
         # Add timestamp if not provided
         if not packet_data.get('timestamp'):
-            packet_data['timestamp'] = datetime.utcnow()
+            packet_data['timestamp'] = datetime.now(timezone.utc)
         
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Perform analysis
         detections = analyzer.analyze_packet(packet_data)
@@ -115,7 +115,7 @@ def analyze_packet():
         if analysis_types and analysis_types != ['all']:
             detections = [d for d in detections if d.get('type') in analysis_types]
         
-        processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+        processing_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
         
         # Determine overall threat level
         threat_level = 'low'
@@ -151,7 +151,7 @@ def analyze_packet():
             'packet_summary': packet_summary,
             'saved_alerts': saved_alerts,
             'analysis_metadata': {
-                'analysis_time': datetime.utcnow().isoformat(),
+                'analysis_time': datetime.now(timezone.utc).isoformat(),
                 'processing_time_ms': round(processing_time, 2),
                 'model_version': '1.0',
                 'analysis_types': analysis_types,
@@ -223,7 +223,7 @@ def analyze_bulk_packets():
         save_results = data.get('save_results', False)
         analysis_types = data.get('analysis_types', ['signature', 'anomaly'])
         
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         results = []
         total_threats = 0
         total_alerts_saved = 0
@@ -232,7 +232,7 @@ def analyze_bulk_packets():
             try:
                 # Add timestamp if not provided
                 if not packet_data.get('timestamp'):
-                    packet_data['timestamp'] = datetime.utcnow()
+                    packet_data['timestamp'] = datetime.now(timezone.utc)
                 
                 # Perform analysis
                 detections = analyzer.analyze_packet(packet_data)
@@ -284,7 +284,7 @@ def analyze_bulk_packets():
                     'threat_level': 'unknown'
                 })
         
-        processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+        processing_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
         
         response = {
             'results': results,
@@ -377,7 +377,7 @@ def analyze_flow():
                 'error': f'Missing required fields: {", ".join(missing_fields)}'
             }), 400
         
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Analyze flow for anomalies
         anomalies = _analyze_flow_anomalies(flow_data)
@@ -421,14 +421,14 @@ def analyze_flow():
                     'src_port': flow_data.get('src_port'),
                     'dst_port': flow_data.get('dst_port'),
                     'payload_size': avg_packet_size,
-                    'timestamp': flow_data.get('start_time', datetime.utcnow())
+                    'timestamp': flow_data.get('start_time', datetime.now(timezone.utc))
                 }
                 
                 alert = logger_service.log_alert(anomaly, packet_data)
                 if alert:
                     saved_alerts.append(alert.id)
         
-        processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+        processing_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
         
         response = {
             'flow_analysis': {
@@ -439,7 +439,7 @@ def analyze_flow():
             'flow_metrics': flow_metrics,
             'saved_alerts': saved_alerts,
             'analysis_metadata': {
-                'analysis_time': datetime.utcnow().isoformat(),
+                'analysis_time': datetime.now(timezone.utc).isoformat(),
                 'processing_time_ms': round(processing_time, 2)
             }
         }
@@ -513,7 +513,7 @@ def get_model_info():
             },
             'model_stats': {
                 'total_detections': model_stats.get('total_detections', 0),
-                'last_updated': datetime.utcnow().isoformat()
+                'last_updated': datetime.now(timezone.utc).isoformat()
             }
         }
         

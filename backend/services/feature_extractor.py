@@ -5,7 +5,7 @@ failed login attempts, data transfer rate, and access frequency
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from collections import defaultdict, deque
 
@@ -40,7 +40,7 @@ class ConnectionTracker:
             Connection start time
         """
         key = (src_ip, dst_ip, dst_port)
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         
         if key not in self.connections:
             self.connections[key] = current_time
@@ -62,7 +62,7 @@ class ConnectionTracker:
         key = (src_ip, dst_ip, dst_port)
         if key in self.connections:
             start_time = self.connections[key]
-            duration = (datetime.utcnow() - start_time).total_seconds()
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             return max(0, duration)
         return 0.0
     
@@ -81,14 +81,14 @@ class ConnectionTracker:
         key = (src_ip, dst_ip, dst_port)
         if key in self.connections:
             start_time = self.connections[key]
-            duration = (datetime.utcnow() - start_time).total_seconds()
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             del self.connections[key]
             return max(0, duration)
         return None
     
     def cleanup_stale_connections(self):
         """Remove stale connections that have timed out"""
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         keys_to_remove = [
             key for key, start_time in self.connections.items()
             if (current_time - start_time) > self.timeout
@@ -122,7 +122,7 @@ class LoginAttemptTracker:
         Args:
             src_ip: Source IP address
         """
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         self.failed_attempts[src_ip].append(current_time)
         self._cleanup_old_attempts(src_ip)
         
@@ -144,7 +144,7 @@ class LoginAttemptTracker:
         if src_ip not in self.failed_attempts:
             return
             
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         cutoff_time = current_time - self.window
         
         self.failed_attempts[src_ip] = [
@@ -183,7 +183,7 @@ class FlowRateCalculator:
             bytes_transferred: Number of bytes transferred
         """
         key = (src_ip, dst_ip, dst_port)
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         
         if key not in self.flow_data or self.flow_data[key]['start_time'] is None:
             self.flow_data[key]['start_time'] = current_time
@@ -214,7 +214,7 @@ class FlowRateCalculator:
         if flow['start_time'] is None or flow['bytes'] == 0:
             return 0.0
         
-        duration = (datetime.utcnow() - flow['start_time']).total_seconds()
+        duration = (datetime.now(timezone.utc) - flow['start_time']).total_seconds()
         if duration <= 0:
             return 0.0
         
@@ -222,7 +222,7 @@ class FlowRateCalculator:
     
     def _cleanup_old_flows(self):
         """Remove flows that are outside the time window"""
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         keys_to_remove = [
             key for key, data in self.flow_data.items()
             if data['start_time'] and (current_time - data['start_time']) > self.window
@@ -253,7 +253,7 @@ class AccessFrequencyTracker:
         Args:
             src_ip: Source IP address
         """
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         self.access_times[src_ip].append(current_time)
         self._cleanup_old_accesses(src_ip)
     
@@ -287,7 +287,7 @@ class AccessFrequencyTracker:
         if src_ip not in self.access_times:
             return
         
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         cutoff_time = current_time - self.window
         
         self.access_times[src_ip] = [
@@ -373,7 +373,7 @@ class FeatureExtractor:
             access_frequency = self.frequency_tracker.get_access_frequency(src_ip)
             
             # Cleanup stale data periodically
-            if hash(str(packet_data.get('timestamp', datetime.utcnow()))) % 100 == 0:
+            if hash(str(packet_data.get('timestamp', datetime.now(timezone.utc)))) % 100 == 0:
                 self.connection_tracker.cleanup_stale_connections()
             
             features = {

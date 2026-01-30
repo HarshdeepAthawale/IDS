@@ -4,7 +4,7 @@ Provides endpoints for retrieving traffic metrics and protocol statistics
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify, current_app
 from models.db_models import traffic_stats_collection, traffic_stat_to_dict
 from services.logger import DatabaseLogger, normalize_protocol
@@ -448,7 +448,7 @@ def get_anomaly_stats():
         severity = request.args.get('severity')
         
         # Get anomaly data from traffic stats
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
         traffic_stats = list(traffic_stats_collection.find(
             {'timestamp': {'$gte': cutoff_time}}
         ).sort('timestamp', -1))
@@ -545,7 +545,7 @@ def get_realtime_stats():
                 'packet_rate': 0,
                 'byte_rate': 0,
                 'avg_packet_size': 0,
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'cache_age_seconds': 0,
                 'message': 'No packet data captured yet. Waiting for network traffic...'
             })
@@ -650,7 +650,7 @@ def get_active_connections_debug():
         
         # Format connections
         connections_list = []
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         
         for idx, ((src_ip, dst_ip, dst_port), last_seen) in enumerate(connections_dict.items(), 1):
             age_seconds = (current_time - last_seen).total_seconds()
