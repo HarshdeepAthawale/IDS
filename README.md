@@ -42,20 +42,6 @@ The system performs real-time packet capture and feature extraction, processes n
 
 The system is built on a modern, scalable architecture with clear separation of concerns:
 
-**High-level components and data flow:**
-
-![System architecture](public/docs/architecture-system.svg)
-
-**Detection path from packet capture to alerts:**
-
-![Detection pipeline](public/docs/detection-pipeline.svg)
-
-**PCAP-specific analysis flow:**
-
-![PCAP analysis flow](public/docs/pcap-analysis-flow.svg)
-
-### Data Flow
-
 1. **Packet Capture Layer** — Scapy-based packet capture engine monitors live network traffic or processes injected test packets via API
 2. **Multi-Layer Analysis Engine** — Each packet flows through three detection mechanisms:
    - Signature-based pattern matching for known threats
@@ -63,10 +49,6 @@ The system is built on a modern, scalable architecture with clear separation of 
    - Deep learning classification via SecIDS-CNN or alternative supervised models
 3. **Persistence Layer** — MongoDB stores alerts, traffic statistics, user activities, and PCAP analysis results with optimized indexing for query performance
 4. **API & Real-Time Communication** — Flask REST API with Socket.IO enables real-time bidirectional communication; Next.js frontend consumes API endpoints and WebSocket streams for live updates
-
-**Docker deployment layout:**
-
-![Docker deployment](public/docs/deployment-docker.svg)
 
 ## Technology Stack
 
@@ -100,7 +82,6 @@ These metrics reflect evaluation on diverse network traffic patterns including n
 
 - [backend/docs/SECIDS_CNN.md](backend/docs/SECIDS_CNN.md) — SecIDS-CNN integration and input/output
 - [SecIDS-CNN/README.md](SecIDS-CNN/README.md) — Model source and usage (Hugging Face: [Keyven/SecIDS-CNN](https://huggingface.co/Keyven/SecIDS-CNN))
-- Diagram sources: `public/docs/architecture-system.svg`, `public/docs/detection-pipeline.svg`, `public/docs/pcap-analysis-flow.svg`, `public/docs/deployment-docker.svg`
 
 ## License
 
