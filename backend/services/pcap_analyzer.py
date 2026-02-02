@@ -4,6 +4,7 @@ Uses scapy for lightweight parsing and heuristic detections suitable for demos.
 Integrates ML models (AnomalyDetector, ClassificationDetector) for enhanced detection.
 """
 
+import csv
 import math
 import os
 import time
@@ -13,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 from scapy.all import DNSQR, IP, TCP, UDP, Raw, ICMP, IPv6, rdpcap  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -51,53 +53,208 @@ class PcapAnalyzer:
         self.max_timeline_points = 60  # avoid very long timelines in responses
         logger.info(f"PcapAnalyzer initialized with max_packets={self.default_max_packets}, ML={'enabled' if packet_analyzer else 'disabled'}")
 
-    def analyze(self, file_path: str, max_packets: Optional[int] = None) -> Dict[str, Any]:
+    def _parse_csv_file(self, file_path: str, max_rows: Optional[int] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
-        Analyze a PCAP file and return structured findings.
+        Parse a CSV file containing network traffic data and extract features.
 
         Args:
-            file_path: Path to the PCAP file
-            max_packets: Optional cap on packets to process for speed
+            file_path: Path to the CSV file
+            max_rows: Optional maximum number of rows to process
+
+        Returns:
+            Tuple of (summary dict, features dict) similar to _summarize_packets
+        """
+        try:
+            # Read CSV file
+            df = pd.read_csv(file_path, nrows=max_rows)
+            logger.info(f"Loaded CSV with {len(df)} rows and columns: {list(df.columns)}")
+
+            if df.empty:
+                raise ValueError("CSV file is empty")
+
+            # Normalize column names (case-insensitive, handle common variations)
+            df.columns = df.columns.str.strip().str.lower()
+
+            # Initialize counters and data structures
+            protocols = Counter()
+            src_ips = Counter()
+            dst_ips = Counter()
+            src_ports = Counter()
+            dst_ports = Counter()
+            flows = []
+            total_bytes = 0
+
+            # Map common column name variations
+            col_mappings = {
+                'src_ip': ['src_ip', 'source_ip', 'ip.src', 'source', 'src'],
+                'dst_ip': ['dst_ip', 'destination_ip', 'ip.dst', 'destination', 'dst'],
+                'src_port': ['src_port', 'source_port', 'sport', 'srcport'],
+                'dst_port': ['dst_port', 'destination_port', 'dport', 'dstport'],
+                'protocol': ['protocol', 'proto', 'ip.proto'],
+                'length': ['length', 'len', 'packet_length', 'bytes', 'size'],
+                'timestamp': ['timestamp', 'time', 'frame.time', 'ts']
+            }
+
+            # Find actual column names in the CSV
+            actual_cols = {}
+            for standard_name, variations in col_mappings.items():
+                for col in df.columns:
+                    if col in variations:
+                        actual_cols[standard_name] = col
+                        break
+
+            logger.debug(f"Mapped columns: {actual_cols}")
+
+            # Process each row
+            for idx, row in df.iterrows():
+                try:
+                    # Extract IP addresses
+                    src_ip = str(row.get(actual_cols.get('src_ip', 'src_ip'), 'unknown'))
+                    dst_ip = str(row.get(actual_cols.get('dst_ip', 'dst_ip'), 'unknown'))
+
+                    # Extract protocol
+                    proto = str(row.get(actual_cols.get('protocol', 'protocol'), 'unknown')).upper()
+                    protocols[proto] += 1
+
+                    # Extract ports if available
+                    src_port = row.get(actual_cols.get('src_port', 'src_port'), 0)
+                    dst_port = row.get(actual_cols.get('dst_port', 'dst_port'), 0)
+
+                    try:
+                        src_port = int(src_port) if src_port and str(src_port).isdigit() else 0
+                        dst_port = int(dst_port) if dst_port and str(dst_port).isdigit() else 0
+                    except (ValueError, TypeError):
+                        src_port = 0
+                        dst_port = 0
+
+                    # Extract packet length
+                    pkt_len = row.get(actual_cols.get('length', 'length'), 0)
+                    try:
+                        pkt_len = int(pkt_len) if pkt_len else 0
+                    except (ValueError, TypeError):
+                        pkt_len = 0
+
+                    total_bytes += pkt_len
+
+                    # Update counters
+                    if src_ip != 'unknown':
+                        src_ips[src_ip] += 1
+                    if dst_ip != 'unknown':
+                        dst_ips[dst_ip] += 1
+                    if src_port > 0:
+                        src_ports[src_port] += 1
+                    if dst_port > 0:
+                        dst_ports[dst_port] += 1
+
+                    # Create flow entry
+                    flows.append({
+                        'src': src_ip,
+                        'dst': dst_ip,
+                        'sport': src_port,
+                        'dport': dst_port,
+                        'proto': proto,
+                        'bytes': pkt_len
+                    })
+
+                except Exception as e:
+                    logger.warning(f"Error processing CSV row {idx}: {e}")
+                    continue
+
+            # Build summary
+            summary = {
+                'total_packets': len(df),
+                'total_bytes': total_bytes,
+                'protocols': dict(protocols.most_common(10)),
+                'top_src_ips': dict(src_ips.most_common(10)),
+                'top_dst_ips': dict(dst_ips.most_common(10)),
+                'top_src_ports': dict(src_ports.most_common(10)),
+                'top_dst_ports': dict(dst_ports.most_common(10)),
+                'unique_src_ips': len(src_ips),
+                'unique_dst_ips': len(dst_ips)
+            }
+
+            # Build features for detection
+            features = {
+                'flows': flows,
+                'src_ips': src_ips,
+                'dst_ips': dst_ips,
+                'src_ports': src_ports,
+                'dst_ports': dst_ports,
+                'protocols': protocols,
+                'total_packets': len(df),
+                'total_bytes': total_bytes
+            }
+
+            logger.info(f"CSV parsing completed: {len(df)} rows, {total_bytes} bytes, {len(protocols)} protocols")
+            return summary, features
+
+        except Exception as e:
+            error_msg = f"Failed to parse CSV file: {str(e)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg) from e
+
+    def analyze(self, file_path: str, max_packets: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Analyze a PCAP or CSV file and return structured findings.
+
+        Args:
+            file_path: Path to the PCAP or CSV file
+            max_packets: Optional cap on packets/rows to process for speed
 
         Returns:
             Dict with metadata, summary, detections, risk and evidence sections.
         """
         start = time.time()
-        
+
         # Check file size and log
         try:
             file_size = os.path.getsize(file_path)
             file_size_mb = file_size / (1024 * 1024)
-            logger.info(f"Analyzing PCAP file: {file_path} ({file_size_mb:.2f} MB)")
-            
+            file_ext = os.path.splitext(file_path)[1].lower()
+            logger.info(f"Analyzing file: {file_path} ({file_size_mb:.2f} MB, type: {file_ext})")
+
             if file_size_mb > 100:
-                logger.warning(f"Large PCAP file detected ({file_size_mb:.2f} MB). Processing may take time.")
+                logger.warning(f"Large file detected ({file_size_mb:.2f} MB). Processing may take time.")
         except OSError as e:
             logger.warning(f"Could not determine file size: {e}")
-        
+            file_ext = os.path.splitext(file_path)[1].lower()
+
         packet_limit = max_packets or self.default_max_packets
-        logger.debug(f"Processing up to {packet_limit} packets")
-        
-        # Load packets with error handling
-        try:
-            packets = rdpcap(file_path, count=packet_limit)
-        except Exception as e:
-            error_msg = f"Failed to parse PCAP file with Scapy: {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg) from e
+        logger.debug(f"Processing up to {packet_limit} packets/rows")
 
-        if not packets:
-            raise ValueError("PCAP contained no packets or could not be parsed")
-        
-        logger.info(f"Loaded {len(packets)} packets from PCAP file")
+        # Determine file type and parse accordingly
+        packets = None
+        if file_ext == '.csv':
+            # Parse CSV file
+            logger.info("Detected CSV file, using CSV parser")
+            try:
+                summary, features = self._parse_csv_file(file_path, max_rows=packet_limit)
+                logger.debug(f"CSV parsing completed: {summary['total_packets']} rows, {summary['total_bytes']} bytes")
+            except Exception as e:
+                logger.error(f"Error parsing CSV: {e}")
+                raise ValueError(f"Failed to parse CSV file: {str(e)}") from e
+        else:
+            # Parse PCAP file
+            logger.info("Detected PCAP file, using Scapy parser")
+            try:
+                packets = rdpcap(file_path, count=packet_limit)
+            except Exception as e:
+                error_msg = f"Failed to parse PCAP file with Scapy: {str(e)}"
+                logger.error(error_msg)
+                raise ValueError(error_msg) from e
 
-        # Summarize packets
-        try:
-            summary, features = self._summarize_packets(packets)
-            logger.debug(f"Packet summary completed: {summary['total_packets']} packets, {summary['total_bytes']} bytes")
-        except Exception as e:
-            logger.error(f"Error summarizing packets: {e}")
-            raise ValueError(f"Failed to summarize packets: {str(e)}") from e
+            if not packets:
+                raise ValueError("PCAP contained no packets or could not be parsed")
+
+            logger.info(f"Loaded {len(packets)} packets from PCAP file")
+
+            # Summarize packets
+            try:
+                summary, features = self._summarize_packets(packets)
+                logger.debug(f"Packet summary completed: {summary['total_packets']} packets, {summary['total_bytes']} bytes")
+            except Exception as e:
+                logger.error(f"Error summarizing packets: {e}")
+                raise ValueError(f"Failed to summarize packets: {str(e)}") from e
         
         # Build heuristic detections
         try:
@@ -107,10 +264,10 @@ class PcapAnalyzer:
             logger.error(f"Error building detections: {e}")
             heuristic_detections = []
         
-        # Integrate ML models if available
+        # Integrate ML models if available (only for PCAP files with packets)
         ml_detections = []
         model_metadata = {}
-        if self.packet_analyzer:
+        if self.packet_analyzer and packets is not None:
             try:
                 logger.debug("Starting ML analysis")
                 ml_detections, model_metadata = self._analyze_with_ml(packets)
@@ -127,6 +284,11 @@ class PcapAnalyzer:
                     "ml_enabled": False,
                     "error": str(e)
                 }
+        elif packets is None:
+            model_metadata = {
+                "ml_enabled": False,
+                "reason": "ML analysis not supported for CSV files (requires packet data)"
+            }
         else:
             model_metadata = {
                 "ml_enabled": False,

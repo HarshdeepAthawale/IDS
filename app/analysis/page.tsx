@@ -96,11 +96,11 @@ function AnalysisPageContent() {
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
   const validatePcapFile = (file: File): string | null => {
-    const validExtensions = ['.pcap', '.pcapng']
+    const validExtensions = ['.pcap', '.pcapng', '.csv']
     const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'))
 
     if (!validExtensions.includes(fileExtension)) {
-      return `Invalid file type. Please upload a .pcap or .pcapng file.`
+      return `Invalid file type. Please upload a .pcap, .pcapng, or .csv file.`
     }
 
     if (file.size > MAX_FILE_SIZE) {
@@ -108,7 +108,7 @@ function AnalysisPageContent() {
     }
 
     if (file.size === 0) {
-      return `File is empty. Please upload a valid PCAP file.`
+      return `File is empty. Please upload a valid file.`
     }
 
     return null
@@ -255,10 +255,10 @@ ML Models:
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Upload PCAP</label>
+                <label className="text-sm font-medium">Upload PCAP/CSV</label>
                 <Input
                   type="file"
-                  accept=".pcap,.pcapng"
+                  accept=".pcap,.pcapng,.csv"
                   onChange={(event) => {
                     const file = event.target.files?.[0]
                     if (file) {

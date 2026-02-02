@@ -57,10 +57,10 @@ def analyze_pcap():
         # Validate file extension
         filename = secure_filename(file.filename)
         file_ext = os.path.splitext(filename)[1].lower()
-        if file_ext not in ['.pcap', '.pcapng']:
+        if file_ext not in ['.pcap', '.pcapng', '.csv']:
             return jsonify({
                 "error": "Invalid file type",
-                "details": f"File must be .pcap or .pcapng, got {file_ext}"
+                "details": f"File must be .pcap, .pcapng, or .csv, got {file_ext}"
             }), 400
 
         # Validate file size (100MB limit)
@@ -103,22 +103,26 @@ def analyze_pcap():
                     "details": "max_packets must be a valid integer"
                 }), 400
 
-        # Validate PCAP file format (check magic bytes)
-        file.seek(0)
-        magic_bytes = file.read(4)
-        file.seek(0)
-        
-        # PCAP magic numbers: 0xa1b2c3d4 (little-endian) or 0xd4c3b2a1 (big-endian)
-        # PCAPNG magic: 0x0a0d0d0a
-        valid_magic = (
-            magic_bytes == b'\xd4\xc3\xb2\xa1' or  # PCAP little-endian
-            magic_bytes == b'\xa1\xb2\xc3\xd4' or  # PCAP big-endian
-            magic_bytes == b'\n\r\r\n'             # PCAPNG
-        )
-        
-        if not valid_magic:
-            logger.warning(f"File {filename} does not appear to be a valid PCAP file (magic bytes: {magic_bytes.hex()})")
-            # Don't fail here, let Scapy try to parse it
+        # Validate PCAP file format (check magic bytes) - skip for CSV files
+        if file_ext in ['.pcap', '.pcapng']:
+            file.seek(0)
+            magic_bytes = file.read(4)
+            file.seek(0)
+
+            # PCAP magic numbers: 0xa1b2c3d4 (little-endian) or 0xd4c3b2a1 (big-endian)
+            # PCAPNG magic: 0x0a0d0d0a
+            valid_magic = (
+                magic_bytes == b'\xd4\xc3\xb2\xa1' or  # PCAP little-endian
+                magic_bytes == b'\xa1\xb2\xc3\xd4' or  # PCAP big-endian
+                magic_bytes == b'\n\r\r\n'             # PCAPNG
+            )
+
+            if not valid_magic:
+                logger.warning(f"File {filename} does not appear to be a valid PCAP file (magic bytes: {magic_bytes.hex()})")
+                # Don't fail here, let Scapy try to parse it
+        else:
+            # CSV files don't have magic bytes, just ensure file pointer is at start
+            file.seek(0)
 
         # Save file to temporary location
         try:
